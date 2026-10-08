@@ -1,0 +1,36 @@
+# Data, caches, model weights: never in git (they live in Kaggle Datasets)
+data/raw/
+data/cache/
+data/tmp/
+*.nii
+*.nii.gz
+*.tar.gz
+*.zip
+*.npz
+*.npy
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+weights/
+runs/
+wandb/
+
+# Papers (licensed CC BY-NC-ND; download from source)
+*.pdf
+
+# Python / notebooks / OS
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.DS_Store
+Thumbs.db
+
+# Secrets
+kaggle.json
+*.token

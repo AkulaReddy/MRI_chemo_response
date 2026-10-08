@@ -1,0 +1,6 @@
+# F2 ablation: no auxiliary HR/HER2 heads.
+inherit: f2_attn.yaml
+model:
+  aux_heads: false
+loss:
+  aux_weight: 0.0

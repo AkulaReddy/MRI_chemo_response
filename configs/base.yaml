@@ -1,0 +1,51 @@
+# Shared defaults (plan Section 4). Every other config inherits from this one.
+data:
+  cohorts: [ispy1, ispy2, duke]
+  train_splits: [train]
+  k_train: 8          # random tumor slices per patient per step
+  k_eval: 16          # evenly spaced tumor slices per patient at evaluation
+  margin: 0           # extra slices beyond the tumor range (ablation: 2)
+  preload: false      # true = keep all slices in RAM (faster, ~10 GB for all cohorts)
+  num_workers: 4
+  sampler: random     # random | balanced
+clinical:
+  features: [HR, HER2, race, menopause, age, log_bbox_vol]
+model:
+  kind: attn                       # image_only | concat | attn
+  backbone: facebook/vit-mae-base  # or google/vit-base-patch16-224 (supervised ablation)
+  pretrained: true
+  train_blocks: 4                  # top ViT blocks fine-tuned (ablation: 2 / all)
+  grad_checkpointing: true
+  aggregation: tokens              # mean_logit | mean | mil | tokens
+  d_model: 256
+  n_layers: 2
+  n_heads: 4
+  ffn: 512
+  dropout: 0.2
+  aux_heads: true
+loss:
+  bce_weight: 0.5
+  focal_weight: 0.5
+  focal_gamma: 2.0
+  pos_weight: null
+  aux_weight: 0.2
+optim:
+  lr_head: 1.0e-3
+  lr_backbone: 3.0e-5
+  layer_decay: 0.75
+  weight_decay: 0.05
+  warmup_epochs: 1
+  max_epochs: 30
+  patience: 8
+  batch_patients: 8
+  amp: true
+  grad_clip: 1.0
+aug:
+  flip: true
+  rotate_deg: 15
+  scale: [0.9, 1.1]
+  intensity: 0.1
+  crop_jitter: 8
+export:
+  k: 32
+  after_train: false

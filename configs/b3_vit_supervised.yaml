@@ -1,0 +1,4 @@
+# B3 backbone ablation: supervised ImageNet-21k/1k ViT-B/16 instead of MAE.
+inherit: b3_vit.yaml
+model:
+  backbone: google/vit-base-patch16-224

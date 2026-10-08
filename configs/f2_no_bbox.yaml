@@ -1,0 +1,4 @@
+# F2 ablation: no tumor-size (log bbox volume) token.
+inherit: f2_attn.yaml
+clinical:
+  features: [HR, HER2, race, menopause, age]

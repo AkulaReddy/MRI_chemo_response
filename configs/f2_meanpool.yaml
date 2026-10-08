@@ -1,0 +1,4 @@
+# F2 ablation: one mean-pooled image token instead of per-slice tokens.
+inherit: f2_attn.yaml
+model:
+  aggregation: mean

@@ -1,0 +1,2 @@
+# F2 (main model): attention fusion of [CLS] + per-slice image tokens + per-feature clinical tokens.
+inherit: base.yaml

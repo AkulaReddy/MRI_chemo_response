@@ -1,0 +1,42 @@
+{
+  "source": "BreastDCEDL_metadata_min_crop.csv",
+  "source_md5": "d58b84d0f343b4b8338cbb222e6dda08",
+  "split_md5": "856c3f59070e8a5cb5c9f31dad1ccc62",
+  "codes": {
+    "0": "train",
+    "2": "val",
+    "1": "test"
+  },
+  "labeled_counts": {
+    "train": 1099,
+    "val": 177,
+    "test": 176
+  },
+  "labeled_pcr": {
+    "test": 53,
+    "train": 322,
+    "val": 53
+  },
+  "labeled_by_cohort": {
+    "test": {
+      "duke": 42,
+      "ispy1": 35,
+      "ispy2": 99
+    },
+    "train": {
+      "duke": 211,
+      "ispy1": 104,
+      "ispy2": 784
+    },
+    "val": {
+      "duke": 45,
+      "ispy1": 33,
+      "ispy2": 99
+    }
+  },
+  "all_counts": {
+    "train": 1532,
+    "test": 270,
+    "val": 268
+  }
+}

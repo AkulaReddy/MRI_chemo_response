@@ -1,0 +1,6 @@
+# Keep line endings stable across Windows (A) and Kaggle (Linux): md5 checks depend on it.
+* text=auto eol=lf
+*.csv -text
+*.json -text
+*.ipynb -text
+*.png binary

@@ -1,0 +1,3 @@
+# F2 ablation: ViT initialised from the best trained B3 (pass --init-from <b3 run>/best.pt).
+inherit: f2_attn.yaml
+init_encoder_only: true

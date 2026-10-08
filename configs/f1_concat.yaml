@@ -1,0 +1,5 @@
+# F1: end-to-end ViT + clinical, mean-pooled image embedding concatenated with clinical -> MLP.
+inherit: base.yaml
+model:
+  kind: concat
+  aggregation: mean

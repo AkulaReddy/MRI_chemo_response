@@ -1,0 +1,4 @@
+# Installed on top of the Kaggle image (which already has torch, transformers, sklearn, pandas).
+nibabel>=5.0
+transformers>=4.40
+pyyaml>=6.0
