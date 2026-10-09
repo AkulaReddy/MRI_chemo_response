@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.2"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.3"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -40,16 +40,20 @@ PUSH = r'''# ==== PUSH the small result files to GitHub (results/<PERSON>/<run_i
 if PUSH_RESULTS:
     git("config", "user.name", f"Person {PERSON} (Kaggle)")
     git("config", "user.email", "kaggle@users.noreply.github.com")
-    git("fetch", "--quiet", "--depth", "1", "origin", "main")
-    git("checkout", "--quiet", "-B", "main", "origin/main")
-    shutil.copytree(f"/kaggle/working/results/{PERSON}", f"results/{PERSON}", dirs_exist_ok=True)
-    git("add", f"results/{PERSON}")
-    print(git("commit", "-m", f"results: {PERSON} {CONFIG} seed {SEED} ({GIT_TAG})"))
+    # the clone holds only the tag, so fetch main into origin/main explicitly; on a rejected push
+    # (someone else pushed first) rebuild the commit on the new main instead of rebasing a shallow clone
     for attempt in range(3):
+        git("fetch", "--quiet", "--depth", "1", "origin", "+refs/heads/main:refs/remotes/origin/main")
+        git("checkout", "--quiet", "-f", "-B", "main", "origin/main")
+        shutil.copytree(f"/kaggle/working/results/{PERSON}", f"results/{PERSON}", dirs_exist_ok=True)
+        git("add", f"results/{PERSON}")
+        print(git("commit", "-m", f"results: {PERSON} {CONFIG} seed {SEED} ({GIT_TAG})"))
         try:
             git("push", "--quiet", "origin", "main"); print("pushed"); break
-        except RuntimeError:
-            git("pull", "--quiet", "--rebase", "origin", "main")
+        except RuntimeError as e:
+            print(f"push attempt {attempt + 1} failed:", e)
+    else:
+        print("NOT pushed: download results/ from the Output and send it to A")
 '''
 
 

@@ -2,7 +2,28 @@
 
 Problems we hit while building the pipeline, what caused them and how we fixed them. Newest first.
 
-## 1. CSV tumour boxes in the original image's pixels (2026-10-09)
+## 1. Results push failed at the end of the first real training run (2026-10-09)
+
+**Symptom.** A's first full `f2_attn` run trained fine (val AUC 0.690), but the last cell stopped with
+`git checkout failed: fatal: 'origin/main' is not a commit and a branch 'main' cannot be created from it`.
+Nothing was pushed to GitHub. The results were still in the notebook version's Output.
+
+**Cause.** SETUP clones only the code tag (`git clone --depth 1 --branch <tag>`). A clone like that
+fetches only the tag, so `git fetch origin main` updated `FETCH_HEAD` but never created `origin/main`.
+Debug runs skip the push, so the debug runs couldn't catch this.
+
+**Fix (tag `d1.3`, `kaggle/make_notebooks.py`).**
+- The push cell fetches `+refs/heads/main:refs/remotes/origin/main` explicitly.
+- If a push is rejected because someone else pushed first, the commit is rebuilt on the new `main`.
+  It no longer uses `git pull --rebase`, which is unreliable in a shallow clone. Each person writes only
+  to `results/<PERSON>/`, so rebuilding can't conflict.
+- After 3 failed attempts it prints `NOT pushed` instead of failing silently.
+- Tested locally with a tag-only shallow clone and a push in between from another clone.
+
+**Lessons.** Any step that only runs in real runs (here, the push) needs a test of its own. A green
+debug run doesn't cover it.
+
+## 2. CSV tumour boxes in the original image's pixels (2026-10-09)
 
 **Symptom.** The first full I-SPY1 cache build (`d1`) gave 158 `ok` and 14 `error`. All 14 errors said
 `in-plane 256x256 != n_xy 512; ValueError: bbox ... outside volume`. One more patient was `ok`
@@ -55,7 +76,7 @@ not resampled:
 - Caches built with `d1` must be rebuilt. The I-SPY1 cache from `d1.1` is fine (mask boxes),
   but I-SPY2 and Duke should be built with `d1.2`.
 
-## 2. Raw Dataset not found on Kaggle (2026-10-09)
+## 3. Raw Dataset not found on Kaggle (2026-10-09)
 
 **Symptom.** `01_build_cache` stopped with `attach the mnj-raw-ispy1 Dataset`, even though the
 Dataset was attached.

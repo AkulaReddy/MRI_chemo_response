@@ -1,0 +1,14 @@
+[16:06:32] run f2_attn_s0_1009-1605_a10edc6 | cuda | cohorts ['ispy1', 'ispy2', 'duke'] | train 1098 (321 pCR) | val 177 (53 pCR) | trainable params 29.6M
+[16:07:46] epoch  0 loss 0.7130 val AUC 0.658 AUPRC 0.503 | 140 slices/s, 1.2 min  *best
+[16:08:44] epoch  1 loss 0.6528 val AUC 0.684 AUPRC 0.466 | 178 slices/s, 1.0 min  *best
+[16:09:45] epoch  2 loss 0.6468 val AUC 0.690 AUPRC 0.516 | 173 slices/s, 1.0 min  *best
+[16:10:44] epoch  3 loss 0.6442 val AUC 0.624 AUPRC 0.424 | 175 slices/s, 1.0 min
+[16:11:43] epoch  4 loss 0.6404 val AUC 0.655 AUPRC 0.449 | 176 slices/s, 1.0 min
+[16:12:43] epoch  5 loss 0.6362 val AUC 0.626 AUPRC 0.406 | 171 slices/s, 1.0 min
+[16:13:41] epoch  6 loss 0.6319 val AUC 0.657 AUPRC 0.505 | 177 slices/s, 1.0 min
+[16:14:40] epoch  7 loss 0.6356 val AUC 0.663 AUPRC 0.464 | 175 slices/s, 1.0 min
+[16:15:39] epoch  8 loss 0.6286 val AUC 0.622 AUPRC 0.375 | 178 slices/s, 1.0 min
+[16:16:37] epoch  9 loss 0.6207 val AUC 0.621 AUPRC 0.364 | 178 slices/s, 1.0 min
+[16:17:35] epoch 10 loss 0.6278 val AUC 0.573 AUPRC 0.400 | 178 slices/s, 1.0 min
+[16:17:35] early stop: no val AUC gain for 8 epochs
+[16:17:48] best epoch 2: val AUC 0.690 (95% CI 0.603-0.774), AUPRC 0.516, ECE 0.080, 0.18 GPU-h

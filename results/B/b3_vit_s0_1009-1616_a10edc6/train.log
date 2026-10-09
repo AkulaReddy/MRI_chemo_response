@@ -1,0 +1,14 @@
+[16:17:19] run b3_vit_s0_1009-1616_a10edc6 | cuda | cohorts ['ispy1', 'ispy2', 'duke'] | train 1098 (321 pCR) | val 177 (53 pCR) | trainable params 28.4M
+[16:18:29] epoch  0 loss 0.3928 val AUC 0.503 AUPRC 0.308 | 150 slices/s, 1.2 min  *best
+[16:19:37] epoch  1 loss 0.3962 val AUC 0.530 AUPRC 0.338 | 152 slices/s, 1.1 min  *best
+[16:20:45] epoch  2 loss 0.3891 val AUC 0.511 AUPRC 0.349 | 153 slices/s, 1.1 min
+[16:21:52] epoch  3 loss 0.3917 val AUC 0.524 AUPRC 0.325 | 155 slices/s, 1.1 min
+[16:22:58] epoch  4 loss 0.3913 val AUC 0.507 AUPRC 0.340 | 155 slices/s, 1.1 min
+[16:24:06] epoch  5 loss 0.3833 val AUC 0.512 AUPRC 0.322 | 152 slices/s, 1.1 min
+[16:25:14] epoch  6 loss 0.3836 val AUC 0.498 AUPRC 0.332 | 154 slices/s, 1.1 min
+[16:26:20] epoch  7 loss 0.3747 val AUC 0.485 AUPRC 0.323 | 155 slices/s, 1.1 min
+[16:27:28] epoch  8 loss 0.3765 val AUC 0.502 AUPRC 0.310 | 152 slices/s, 1.1 min
+[16:28:35] epoch  9 loss 0.3703 val AUC 0.522 AUPRC 0.316 | 155 slices/s, 1.1 min
+[16:28:35] early stop: no val AUC gain for 8 epochs
+[16:28:49] best epoch 1: val AUC 0.530 (95% CI 0.435-0.627), AUPRC 0.338, ECE 0.063, 0.19 GPU-h
+[16:30:42] exported 1275 patients to /kaggle/working/runs/b3_vit_s0_1009-1616_a10edc6
