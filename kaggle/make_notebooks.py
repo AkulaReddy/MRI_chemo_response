@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO_SLUG = "OWNER/REPO"   # A: set to the GitHub "owner/name" once the remote exists, then rerun
+REPO_SLUG = "AkulaReddy/MRI_chemo_response"
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
