@@ -11,9 +11,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
+CURRENT_TAG = "d1.2"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
+assert PERSON in ("A", "B", "C"), 'set PERSON = "A", "B" or "C" in the parameters cell'
 from kaggle_secrets import UserSecretsClient
 _tok = UserSecretsClient().get_secret("GITHUB_TOKEN")
 _hdr = "Authorization: Basic " + base64.b64encode(f"x-access-token:{_tok}".encode()).decode()
@@ -69,8 +71,8 @@ def notebook(cells):
 def params(extra):
     return code(f'''# ==== PARAMETERS (edit these) ====
 REPO = "{REPO_SLUG}"
-GIT_TAG = "d1"          # code version; A posts the tag to use
-PERSON = "B"            # "A", "B" or "C"
+GIT_TAG = "{CURRENT_TAG}"        # code version; A posts the tag to use
+PERSON = ""             # set to "A", "B" or "C"
 ''' + extra)
 
 
