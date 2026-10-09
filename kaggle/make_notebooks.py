@@ -93,12 +93,22 @@ LIMIT = 0               # 0 = all patients; 10 for a quick check
 RAW = ""                # leave "" to find the mnj-raw-<cohort> input automatically
 '''),
         code(SETUP),
-        code(r'''import glob
-if not RAW:
-    hits = [d for d in glob.glob("/kaggle/input/**/", recursive=True)
-            if f"raw-{COHORT}" in d.rstrip("/").split("/")[-1]]
-    assert hits, f"attach the mnj-raw-{COHORT} Dataset (+ Add Input)"
-    RAW = hits[0]
+        code(r'''if not RAW:   # Kaggle may unpack the .tar.gz into a folder; either form works
+    want = f"BreastDCEDL_{COHORT.upper()}_min_crop"
+    hits = []
+    for root, dirs, files in os.walk("/kaggle/input", followlinks=True):
+        if root.count("/") > 7:
+            dirs[:] = []
+            continue
+        hits += [os.path.join(root, n) for n in dirs + files if n.startswith(want)]
+        dirs[:] = [d for d in dirs if not d.startswith("BreastDCEDL_")]
+    if not hits:
+        for root, dirs, files in os.walk("/kaggle/input", followlinks=True):
+            print(root, dirs[:5], files[:5])
+            if root.count("/") > 5:
+                dirs[:] = []
+    assert hits, f"no {want} folder or .tar.gz under /kaggle/input: attach mnj-raw-{COHORT} or set RAW"
+    RAW = hits[0] if os.path.isdir(hits[0]) else os.path.dirname(hits[0])
 OUT = f"/kaggle/working/cache_{COHORT}"
 print("raw:", RAW, os.listdir(RAW))
 cmd = [sys.executable, "scripts/build_cache.py", "--cohort", COHORT, "--raw", RAW, "--out", OUT, "--workers", "4"]
