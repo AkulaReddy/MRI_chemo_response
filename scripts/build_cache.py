@@ -12,6 +12,8 @@
 plus `cache_index.csv` (one QC row per patient), `cache_meta.json` and `summary_grid.png`.
 
 Coordinates: the CSV in-plane box (`sraw/eraw/scol/ecol`, [start, end)) matches the masks. The CSV
+box is in original-resolution pixels (`n_xy`); volumes are all resampled in-plane (e.g. 512 -> 256), so
+the box is rescaled when they differ and, where a mask exists, replaced by the mask's box. The CSV
 z-range is used only if the volume depth equals `n_z`; otherwise (I-SPY volumes cropped in z, seen in
 the demo archive) the mask's z-range is used. Missing CSV phase files fall back to the nearest
 available phase. Every fallback is recorded in the QC table: check it before training.
@@ -128,20 +130,28 @@ def process(pid, row, phase_src, mask_src, out_dir):
             qc["note"] += f"mask shape {mask.shape} != volume; mask ignored; "
             mask, mb = None, None
         y0, y1, x0, x1 = (int(row[c]) for c in ("sraw", "eraw", "scol", "ecol"))
+        n_xy, qc["xy_source"] = int(row["n_xy"]), "csv"
+        if (h, w) != (n_xy, n_xy):   # CSV box is in original-resolution pixels; volume was resampled
+            sy, sx = h / n_xy, w / n_xy
+            y0, y1 = int(np.floor(y0 * sy)), min(h, int(np.ceil(y1 * sy)))
+            x0, x1 = int(np.floor(x0 * sx)), min(w, int(np.ceil(x1 * sx)))
+            qc["xy_source"] = "csv_scaled"
         if depth == int(row["n_z"]):
             z0, z1, qc["z_source"] = int(row["mask_start"]), int(row["mask_end"]), "csv"
         elif mb is not None:
             (z0, z1), qc["z_source"] = mb[0], "mask"
         else:
             raise ValueError(f"depth {depth} != n_z {int(row['n_z'])} and no mask to locate the tumor")
-        if not (0 <= z0 < z1 <= depth and 0 <= y0 < y1 <= h and 0 <= x0 < x1 <= w):
-            raise ValueError(f"bbox z{z0}:{z1} y{y0}:{y1} x{x0}:{x1} outside volume {vols[0].shape}")
-        if mb is not None:   # agreement of the CSV box with the mask, for QC
+        if mb is not None:   # agreement of the (scaled) CSV box with the mask, for QC
             (mz0, mz1), (my0, my1), (mx0, mx1) = mb
             inter = max(0, min(y1, my1) - max(y0, my0)) * max(0, min(x1, mx1) - max(x0, mx0))
             union = (y1 - y0) * (x1 - x0) + (my1 - my0) * (mx1 - mx0) - inter
             qc.update(mask_csv_iou_yx=round(inter / union, 3), mask_z=f"{mz0}:{mz1}",
                       mask_vox=int((mask > 0).sum()))
+            if qc["xy_source"] == "csv_scaled":   # the mask is exact; the rescaled CSV box may not be
+                y0, y1, x0, x1, qc["xy_source"] = my0, my1, mx0, mx1, "mask"
+        if not (0 <= z0 < z1 <= depth and 0 <= y0 < y1 <= h and 0 <= x0 < x1 <= w):
+            raise ValueError(f"bbox z{z0}:{z1} y{y0}:{y1} x{x0}:{x1} outside volume {vols[0].shape}")
         rgb, (lo, hi) = to_rgb_uint8(*vols)
         s0, s1 = max(0, z0 - MARGIN), min(depth, z1 + MARGIN)
         crop, (cy0, cx0) = crop_slices(rgb[s0:s1], (y0 + y1) / 2, (x0 + x1) / 2, CACHE_SIZE)
@@ -294,6 +304,7 @@ def main():
     info = {"cohort": a.cohort, "builder_version": BUILDER_VERSION, "git": git_commit(),
             "raw": str(a.raw), "cache_size": CACHE_SIZE, "margin": MARGIN, "status_counts": counts,
             "z_source": index.get("z_source", pd.Series(dtype=str)).value_counts().to_dict(),
+            "xy_source": index.get("xy_source", pd.Series(dtype=str)).value_counts().to_dict(),
             "phase_fallbacks": int((index.get("phase_fallback", pd.Series(dtype=str)).fillna("") != "").sum()),
             "seconds": round(time.time() - t_start)}
     (a.out / "cache_meta.json").write_text(json.dumps(info, indent=2))

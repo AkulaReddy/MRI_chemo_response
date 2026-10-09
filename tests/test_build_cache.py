@@ -25,18 +25,22 @@ def _add(tf, name, a):
 
 def test_build_from_tar(tmp_path):
     m = load_metadata()
-    spy1 = m[m.cohort == "ispy1"].head(2)
+    spy1 = m[m.cohort == "ispy1"]
+    spy1 = pd.concat([spy1[spy1.n_xy == 256].head(2), spy1[spy1.n_xy == 512].head(1)])
     r_duke = next(m[m.cohort == "duke"].head(1).itertuples())
     raw = tmp_path / "raw"
     raw.mkdir()
     rng = np.random.default_rng(0)
     with tarfile.open(raw / "BreastDCEDL_test_min_crop.tar.gz", "w:gz") as tf:
-        # I-SPY1 patient 1: depth == n_z (CSV z-range); patient 2: z-cropped (mask z-range)
+        # I-SPY1 patient 1: depth == n_z (CSV z-range); patient 2: z-cropped (mask z-range);
+        # patient 3: n_xy 512 resampled to 256 (CSV box in 512-pixel units, rescaled)
         for i, r in enumerate(spy1.itertuples()):
             depth = int(r.n_z) if i == 0 else 20
             z0, z1 = (int(r.mask_start), int(r.mask_end)) if i == 0 else (2, 12)
+            f = 256 / r.n_xy
             mask = np.zeros((depth, 256, 256))
-            mask[z0:z1, int(r.sraw):int(r.eraw), int(r.scol):int(r.ecol)] = 1
+            mask[z0:z1, int(np.floor(r.sraw * f)):int(np.ceil(r.eraw * f)),
+                 int(np.floor(r.scol * f)):int(np.ceil(r.ecol * f))] = 1
             for k in (int(r.pre), int(r.post_early), int(r.post_late)):
                 _add(tf, f"x/dce/{r.pid}_spy1_vis1_dce_aqc_{k}.nii.gz",
                      rng.normal(100 + 20 * k, 10, (depth, 256, 256)) + 300 * mask)
@@ -46,7 +50,7 @@ def test_build_from_tar(tmp_path):
             _add(tf, f"x/dce/{r_duke.pid}_duke_dce_aqc_{k}.nii.gz",
                  rng.normal(100, 10, (int(r_duke.n_z), 256, 256)))
         _add(tf, "x/mask/desktop.ini.nii.gz", np.zeros((2, 2, 2)))   # unrelated file: ignored
-    for cohort, n in (("ispy1", 2), ("duke", 1)):
+    for cohort, n in (("ispy1", 3), ("duke", 1)):
         out = tmp_path / f"cache_{cohort}"
         subprocess.run([sys.executable, str(ROOT / "scripts" / "build_cache.py"), "--cohort", cohort,
                         "--raw", str(raw), "--out", str(out), "--workers", "1"], check=True, cwd=ROOT)
@@ -60,7 +64,8 @@ def test_build_from_tar(tmp_path):
             assert d["rgb"].dtype == np.uint8 and d["rgb"].shape[1:] == (240, 240, 3)
             assert 0 <= d["t0"] < d["t1"] <= d["rgb"].shape[0]
         if cohort == "ispy1":
-            assert sorted(ok.z_source) == ["csv", "mask"]
+            assert sorted(ok.z_source) == ["csv", "mask", "mask"]
+            assert sorted(ok.xy_source) == ["csv", "csv", "mask"]
             assert (ok.mask_csv_iou_yx == 1.0).all()
             for pid in ok.pid:   # the tumor (bright inside the mask) sits inside the cached box
                 d = np.load(out / f"{pid}.npz")
