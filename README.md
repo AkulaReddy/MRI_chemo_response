@@ -50,4 +50,4 @@ python -m src.train --config f2_attn --debug
 - The split is frozen in `data/splits/split_v1.csv` (Zenodo `test` column: 0 train, 2 val, 1 test).
   `patient_table()` refuses the test split; only the final evaluation (day 16) reads it.
 - No data, caches or weights in git (they live in Kaggle Datasets). Secrets go in Kaggle secrets only.
-- Only A edits code; B and C run tagged versions on Kaggle.
+
