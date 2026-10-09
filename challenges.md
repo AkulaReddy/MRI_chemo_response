@@ -2,44 +2,58 @@
 
 Problems we hit while building the pipeline, what caused them and how we fixed them. Newest first.
 
-## 1. CSV tumour boxes in original-resolution pixels (2026-10-09)
+## 1. CSV tumour boxes in the original image's pixels (2026-10-09)
 
 **Symptom.** The first full I-SPY1 cache build (`d1`) gave 158 `ok` and 14 `error`. All 14 errors said
 `in-plane 256x256 != n_xy 512; ValueError: bbox ... outside volume`. One more patient was `ok`
 but had a mask vs CSV box IoU of 0.0. Its crop was in the wrong place, and no error was raised.
 
-**Cause.** The metadata box (`sraw/eraw/scol/ecol`) is in the pixels of the original scan, whose
-in-plane size is `n_xy`. In the BreastDCEDL archive every volume is resampled in-plane to
-256×256. The Zenodo demo archive happened to contain only `n_xy` = 256 patients, so the
-mismatch never showed up there. `xy_spacing` is also in original pixels: the 512-pixel I-SPY1
-scans have 0.39 mm spacing, against 0.78 mm for 256, with the same 200 mm field of view.
+**Cause.** The metadata box (`sraw/eraw/scol/ecol`) is in the pixels of the original image, whose
+in-plane size is `n_xy`. Every archive volume is 256×256. The Zenodo demo archive happened to
+contain only `n_xy` = 256 patients, so this never showed up there.
 
 | cohort | `n_xy` other than 256 |
 |---|---|
-| I-SPY1 | 15 of 172 (512) |
-| I-SPY2 | 215 of 982 (384, 320, 312, 128, 448) |
-| Duke | 2 of 916 (448) |
+| I-SPY1 | 15 of 172 (512), 12 train / 3 test |
+| I-SPY2 | 215 of 982 (384, 320, 312, 448, and 2 at 128), 172 train / 25 val / 18 test |
+| Duke | 2 of 916 (448), both train, 1 labeled |
 
-The I-SPY2 numbers are why this mattered: built with `d1`, about 1 in 5 I-SPY2 patients would
-have failed or been cropped around the wrong place.
+**First guess was wrong (`d1.1`).** We assumed the volumes had been *resampled* to 256 and scaled
+the box by `256 / n_xy`. The I-SPY masks showed otherwise: the scaled box against the mask gave an
+IoU of only 0.11–0.27. The I-SPY1 `d1.1` cache was still correct, because it used the mask box.
 
-**Fix (`scripts/build_cache.py`, tag `d1.1`).**
-- If the volume's in-plane size differs from `n_xy`, the CSV box is scaled by `256 / n_xy`, rounding outwards.
-- If the patient has a mask (every I-SPY patient), the mask's own box is used instead. The IoU of
-  the scaled CSV box against the mask is still recorded, as a check on the scaling.
-- Only the 2 Duke patients with `n_xy` 448 depend on the scaled box alone.
-- A new QC column, `xy_source` (`csv`, `csv_scaled` or `mask`), records which box each patient got.
-  It is also counted in `cache_meta.json` and printed by `01_build_cache`.
-- `log_bbox_vol` (a clinical feature) needed no change: box pixels × `xy_spacing` are in the
-  same units, so the volume in mm³ was already correct.
-- `tests/test_build_cache.py` now includes a 512→256 patient.
+**What was really done (checked on the 15 I-SPY1 patients at 512).** The originals were *cropped*,
+not resampled:
+- The CSV box sizes equal the mask box sizes pixel for pixel.
+- Each volume is a 256-pixel window at the original resolution, starting at
+  `clamp(floor((start + end) / 2) - 127, 0, n_xy - 256)` on each axis. That is, the window is
+  centred on the tumour box.
+- That rule matches 29 of the 30 measured offsets exactly. The exception is ISPY1_1103, whose
+  tumour is 272 px tall: taller than the window, so its mask box is cut off at 256.
+- So in-plane pixel size really does vary between patients: 0.39 mm for the 512 I-SPY1 scans, 0.78 mm
+  for the 256 ones. That is a source of scanner/domain variation, not a bug.
+- `log_bbox_vol` (a clinical feature) needed no change: CSV box pixels × `xy_spacing` are the
+  original pixels, so the volume in mm³ was already correct.
+
+**Fix (`scripts/build_cache.py`, tag `d1.2`).**
+- If `n_xy` is bigger than the volume, the CSV box is shifted by the centred-window offset above
+  (`xy_source = csv_shifted`).
+- Where a mask exists (every I-SPY patient), the mask's box is used instead (`xy_source = mask`), and
+  the IoU of the shifted CSV box against the mask is printed as a check. It should be about 1.0.
+- If `n_xy` is smaller than the volume (2 I-SPY2 patients at 128), the rule is unknown. The box is
+  rescaled (`csv_scaled`), and the mask overrides it anyway.
+- Only Duke's 2 patients at 448 depend on the shifted box alone.
+- `tests/test_build_cache.py` includes a 512-pixel patient cropped this way.
 
 **Lessons.**
 - The demo archive is not representative. Check the value ranges of every metadata column
   (`n_xy` here) before assuming they match the data.
 - A box that falls inside the image can still be wrong. Keep the mask vs CSV IoU in the QC and
   look at its minimum, not only the error count.
-- Any cache built with `d1` must be rebuilt with `d1.1`.
+- Test a hypothesis against ground truth before building on it. The mask IoU check in `d1.1` is
+  what showed the resampling guess was wrong.
+- Caches built with `d1` must be rebuilt. The I-SPY1 cache from `d1.1` is fine (mask boxes),
+  but I-SPY2 and Duke should be built with `d1.2`.
 
 ## 2. Raw Dataset not found on Kaggle (2026-10-09)
 

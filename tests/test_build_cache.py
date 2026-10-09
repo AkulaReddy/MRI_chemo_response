@@ -26,21 +26,23 @@ def _add(tf, name, a):
 def test_build_from_tar(tmp_path):
     m = load_metadata()
     spy1 = m[m.cohort == "ispy1"]
-    spy1 = pd.concat([spy1[spy1.n_xy == 256].head(2), spy1[spy1.n_xy == 512].head(1)])
+    big = spy1[(spy1.n_xy == 512) & (spy1.eraw - spy1.sraw <= 256) & (spy1.ecol - spy1.scol <= 256)]
+    spy1 = pd.concat([spy1[spy1.n_xy == 256].head(2), big.head(1)])
     r_duke = next(m[m.cohort == "duke"].head(1).itertuples())
     raw = tmp_path / "raw"
     raw.mkdir()
     rng = np.random.default_rng(0)
     with tarfile.open(raw / "BreastDCEDL_test_min_crop.tar.gz", "w:gz") as tf:
         # I-SPY1 patient 1: depth == n_z (CSV z-range); patient 2: z-cropped (mask z-range);
-        # patient 3: n_xy 512 resampled to 256 (CSV box in 512-pixel units, rescaled)
+        # patient 3: n_xy 512 cropped to a 256 window centred on the CSV box
         for i, r in enumerate(spy1.itertuples()):
             depth = int(r.n_z) if i == 0 else 20
             z0, z1 = (int(r.mask_start), int(r.mask_end)) if i == 0 else (2, 12)
-            f = 256 / r.n_xy
+            oy, ox = ((int(a + b) // 2 - 127 if r.n_xy > 256 else 0) for a, b in
+                      ((r.sraw, r.eraw), (r.scol, r.ecol)))
+            oy, ox = (min(max(o, 0), int(r.n_xy) - 256) for o in (oy, ox))
             mask = np.zeros((depth, 256, 256))
-            mask[z0:z1, int(np.floor(r.sraw * f)):int(np.ceil(r.eraw * f)),
-                 int(np.floor(r.scol * f)):int(np.ceil(r.ecol * f))] = 1
+            mask[z0:z1, int(r.sraw) - oy:int(r.eraw) - oy, int(r.scol) - ox:int(r.ecol) - ox] = 1
             for k in (int(r.pre), int(r.post_early), int(r.post_late)):
                 _add(tf, f"x/dce/{r.pid}_spy1_vis1_dce_aqc_{k}.nii.gz",
                      rng.normal(100 + 20 * k, 10, (depth, 256, 256)) + 300 * mask)

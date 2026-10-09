@@ -125,9 +125,9 @@ if "z_source" in idx:
     print(idx.z_source.value_counts(dropna=False))
 if "xy_source" in idx:
     print(idx.xy_source.value_counts(dropna=False))
-    sc = idx[idx.xy_source.isin(["mask", "csv_scaled"])]
+    sc = idx[idx.xy_source != "csv"]
     if "mask_csv_iou_yx" in sc and sc.mask_csv_iou_yx.notna().any():
-        print("rescaled CSV box vs mask IoU:", sc.mask_csv_iou_yx.describe().round(3).to_dict())
+        print("shifted CSV box vs mask IoU:", sc.mask_csv_iou_yx.describe().round(3).to_dict())
 if "mask_csv_iou_yx" in idx:
     print("mask vs CSV box IoU:", idx.mask_csv_iou_yx.describe().round(3).to_dict())
 display(idx[idx.status == "error"].head(20))
