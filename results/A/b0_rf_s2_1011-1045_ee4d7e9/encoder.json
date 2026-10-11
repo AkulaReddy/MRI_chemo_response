@@ -1,0 +1,16 @@
+{
+  "features": [
+    "HR",
+    "HER2",
+    "race",
+    "menopause",
+    "age"
+  ],
+  "stats": {
+    "age": {
+      "median": 48.0,
+      "mean": 48.66826205641492,
+      "std": 10.478686581710132
+    }
+  }
+}

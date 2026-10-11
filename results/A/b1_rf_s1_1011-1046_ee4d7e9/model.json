@@ -1,0 +1,27 @@
+{
+  "kind": "rf",
+  "hyperparams": {
+    "min_samples_leaf": 40,
+    "cv_auc": 0.7034751731803144
+  },
+  "intercept": null,
+  "weights": {
+    "HR=0": 0.26082652217929814,
+    "HR=1": 0.22270257162117418,
+    "HR=missing": 0.0,
+    "HER2=0": 0.12244712969193786,
+    "HER2=1": 0.11400904894885217,
+    "HER2=missing": 0.0,
+    "race=white": 0.005484861169260603,
+    "race=black": 0.004247763720654649,
+    "race=other": 0.0005257895274546094,
+    "race=missing": 0.0,
+    "menopause=0": 0.02155181036368567,
+    "menopause=1": 0.009673269872508522,
+    "menopause=missing": 0.006437003929619753,
+    "age": 0.07691409512872595,
+    "log_bbox_vol": 0.15518013384682794,
+    "age_missing": 0.0,
+    "log_bbox_vol_missing": 0.0
+  }
+}
