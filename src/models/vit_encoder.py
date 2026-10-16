@@ -9,6 +9,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from src import hide_broken_torchaudio
+
+hide_broken_torchaudio()   # before transformers is imported below
+
 IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 BACKBONES = {
     "facebook/vit-mae-base": dict(kind="mae", mean=IMAGENET_MEAN, std=IMAGENET_STD),

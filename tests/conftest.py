@@ -7,7 +7,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-import src  # noqa: E402,F401  (hides a broken local torchaudio)
+import src  # noqa: E402
+
+src.hide_broken_torchaudio()   # test_fusion_shapes imports transformers directly
 
 
 @pytest.fixture(scope="session")

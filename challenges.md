@@ -2,7 +2,29 @@
 
 Problems we hit while building the pipeline, what caused them and how we fixed them. Newest first.
 
-## 1. Results push failed at the end of the first real training run (2026-10-09)
+## 1. Training augmentation distorted images when flipping one axis (2026-10-14)
+
+**Symptom.** In the EDA notebook's augmentation figure, a round synthetic tumour came out as a tilted
+**ellipse** in some draws. Rotation, isotropic scaling, flips and shifts can't do that.
+
+**Cause.** `train_transform` (`src/data/transforms.py`) built the affine matrix as
+`[[cos·fx, −sin], [sin, cos·fy]]`.
+- When only one axis is flipped (`fx ≠ fy`, about half of all training samples), that isn't a rotation.
+- It shears the image, by up to **1.73×** at a 15° rotation.
+- Everything trained so far (B3, F1, F2, the overfit test) saw partly distorted tumour shapes.
+
+**Fix (tag `d1.4`).**
+- The matrix is now rotation × flip: `[[cos·fx, −sin·fy], [sin·fx, cos·fy]]`.
+- `tests/test_transforms.py` augments a disc 40 times and checks that it stays round. The test fails on the
+  old code and passes on the new.
+
+**Lessons.**
+- Look at augmented samples, not only at the code: the bug was visible in one figure and invisible in the
+  unit tests that existed.
+- Runs before `d1.4` (seed-0 B3/F1/F2) used the distorted augmentation. Rerun them before reporting final
+  numbers.
+
+## 2. Results push failed at the end of the first real training run (2026-10-09)
 
 **Symptom.** A's first full `f2_attn` run trained fine (val AUC 0.690), but the last cell stopped with
 `git checkout failed: fatal: 'origin/main' is not a commit and a branch 'main' cannot be created from it`.
@@ -23,7 +45,7 @@ Debug runs skip the push, so the debug runs couldn't catch this.
 **Lessons.** Any step that only runs in real runs (here, the push) needs a test of its own. A green
 debug run doesn't cover it.
 
-## 2. CSV tumour boxes in the original image's pixels (2026-10-09)
+## 3. CSV tumour boxes in the original image's pixels (2026-10-09)
 
 **Symptom.** The first full I-SPY1 cache build (`d1`) gave 158 `ok` and 14 `error`. All 14 errors said
 `in-plane 256x256 != n_xy 512; ValueError: bbox ... outside volume`. One more patient was `ok`
@@ -76,7 +98,7 @@ not resampled:
 - Caches built with `d1` must be rebuilt. The I-SPY1 cache from `d1.1` is fine (mask boxes),
   but I-SPY2 and Duke should be built with `d1.2`.
 
-## 3. Raw Dataset not found on Kaggle (2026-10-09)
+## 4. Raw Dataset not found on Kaggle (2026-10-09)
 
 **Symptom.** `01_build_cache` stopped with `attach the mnj-raw-ispy1 Dataset`, even though the
 Dataset was attached.

@@ -64,6 +64,36 @@ def load_split(path: str | Path = SPLIT_CSV) -> pd.DataFrame:
     return pd.read_csv(path, dtype={"pid": str}).set_index("pid", drop=False).rename_axis(None)
 
 
+def patient_table(splits, cohorts=("ispy1", "ispy2", "duke"), labeled_only=True, allow_test=False,
+                  cache_dirs=None):
+    """Metadata rows for the requested splits/cohorts, joined with the frozen split.
+
+    If `cache_dirs` ({cohort: dir}) is given, patients without a successfully cached volume are
+    dropped and reported.
+    """
+    splits = [splits] if isinstance(splits, str) else list(splits)
+    if "test" in splits and not allow_test:
+        raise PermissionError("test split requested outside the final evaluation (D-006)")
+    split = load_split()
+    meta = load_metadata()
+    meta = meta.drop(columns=["split"]).join(split[["split"]])
+    t = meta[meta.split.isin(splits) & meta.cohort.isin(cohorts)]
+    if labeled_only:
+        t = t[t.labeled]
+    if cache_dirs is not None:
+        ok = set()
+        for c in cohorts:
+            if c in cache_dirs:
+                idx = pd.read_csv(Path(cache_dirs[c]) / "cache_index.csv")
+                ok |= set(idx.loc[idx.status == "ok", "pid"])
+        missing = sorted(set(t.pid) - ok)
+        if missing:
+            print(f"[data] {len(missing)} of {len(t)} patients have no cache entry, dropped "
+                  f"(first: {missing[:5]})")
+        t = t[t.pid.isin(ok)]
+    return t.copy()
+
+
 def parse_name(fname: str):
     """('phase', pid, ds, k) or ('mask', pid, ds, None) or None for unrelated files."""
     base = Path(fname).name

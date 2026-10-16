@@ -49,8 +49,9 @@ def train_transform(x_u8: torch.Tensor, mean, std, aug=None, generator=None):
     j = aug["crop_jitter"] * 2.0 / w
     tx, ty = u(-j, j), u(-j, j)
     cos, sin = torch.cos(ang) / sc, torch.sin(ang) / sc
-    theta = torch.stack([torch.stack([cos * fx, -sin, tx], 1),
-                         torch.stack([sin, cos * fy, ty], 1)], 1)            # (B, 2, 3)
+    # rotation @ diag(fx, fy): flipping one column-sign of the rotation keeps the map rigid
+    theta = torch.stack([torch.stack([cos * fx, -sin * fy, tx], 1),
+                         torch.stack([sin * fx, cos * fy, ty], 1)], 1)       # (B, 2, 3)
     grid = F.affine_grid(theta, (b, k * c, h, w), align_corners=False)
     x = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
     x = center_crop(x.reshape(b, k, c, h, w))

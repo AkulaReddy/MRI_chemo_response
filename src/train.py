@@ -27,7 +27,9 @@ import torch
 import yaml
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
-import src  # noqa: F401  (hides a broken torchaudio before transformers is imported)
+import src
+
+src.hide_broken_torchaudio()   # before transformers is imported
 from src import stats
 from src.config import config_hash, load_config, set_dotted
 from src.data.clinical import ClinicalEncoder

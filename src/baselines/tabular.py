@@ -24,7 +24,7 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold
 
 from src import stats
 from src.data.clinical import CAT_LEVELS, ClinicalEncoder
-from src.data.datasets import patient_table
+from src.data.metadata import patient_table
 
 ROOT = Path(__file__).resolve().parents[2]
 COHORTS = ["ispy1", "ispy2", "duke"]
