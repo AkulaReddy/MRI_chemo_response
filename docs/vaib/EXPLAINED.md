@@ -114,7 +114,7 @@ targets from the literature are ~0.65–0.72 (Nishizawa MRI-only: 0.68 internal)
 
 ## 8. How to run (Kaggle)
 See `kaggle/vaib/README.md`. All steps use the full real dataset:
-1. step1: download the full release into Kaggle (×3 cohorts → `mnj-raw-*`).
+1. step1a/1b/1c: download the full release into Kaggle (one notebook per cohort → `mnj-raw-*`).
 2. step2: build `mnj-cache2-*` (×3, CPU).
 3. step3: diagnostics (CPU).
 4. step4: probe (GPU, ~30 min).

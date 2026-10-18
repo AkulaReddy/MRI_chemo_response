@@ -10,7 +10,9 @@ findings: `docs/vaib/EXPLAINED.md`. The team's `kaggle/*.ipynb` are unchanged.
 | step | notebook (this folder) | accelerator | attach as input | runs | save output as Dataset |
 |---|---|---|---|---|---|
 | 0 (optional) | `step0_demo_download_check.ipynb` | None | – | 1 | – (a 7-patient sample, just to see the data) |
-| **1** | `step1_download_full_dataset.ipynb` | None | – | **3** (`COHORT` = ispy1, ispy2, duke) | `mnj-raw-ispy1`, `mnj-raw-ispy2`, `mnj-raw-duke` |
+| **1a** | `step1a_download_ispy1.ipynb` | None | – | 1 | `mnj-raw-ispy1` (1.6 GB) |
+| **1b** | `step1b_download_ispy2.ipynb` | None | – | 1 | `mnj-raw-ispy2` (13.6 GB) |
+| **1c** | `step1c_download_duke.ipynb` | None | – | 1 | `mnj-raw-duke` (8.6 GB) |
 | **2** | `step2_build_cache_v2.ipynb` | None | the matching `mnj-raw-<cohort>` + code | **3** | `mnj-cache2-ispy1`, `mnj-cache2-ispy2`, `mnj-cache2-duke` |
 | **3** | `step3_input_diagnostics.ipynb` | None | all 3 `mnj-cache2-*` + code | 1 | – |
 | **4** | `step4_probe_sweep.ipynb` | GPU T4 x2 | all 3 `mnj-cache2-*` + code | 1 | – (read the TOP line) |
@@ -38,7 +40,7 @@ Every notebook needs **Internet ON** (Session options; requires a phone-verified
 In every step-2-5 notebook set `PERSON` ("A", "B" or "C", your role in the team) in the first cell.
 
 ## Order and timing
-1. **step1** x3, in parallel: ~30 min (I-SPY1), ~2-4 h (I-SPY2), ~1.5-3 h (Duke). Check that the log ends with
+1. **step1a, 1b, 1c** as three separate notebooks, in parallel; nothing to edit: ~30 min (I-SPY1), ~2-4 h (I-SPY2), ~1.5-3 h (Duke). Check that the log ends with
    `ALL MD5 OK`, then New Dataset from the Output.
 2. **step2** x3, each with its `mnj-raw-*` attached: 20-60 min each. New Dataset `mnj-cache2-<cohort>`.
    Leave `LIMIT = 0` (= every patient). `ALL_PATIENTS = True` also stores the 618 patients without a pCR label;

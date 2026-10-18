@@ -18,7 +18,8 @@ All 2,070 patients: I-SPY1 172, I-SPY2 982, Duke 916. 1,452 of them have a pCR l
 `BreastDCEDL_demo_data.tar.gz` (55 MB, 7 patients) is only a sample; it is not part of the full set.
 
 ## Option 1, recommended: download inside Kaggle (no laptop download)
-Run `kaggle/vaib/step1_download_full_dataset.ipynb` three times, with `COHORT = "ispy1"`, `"ispy2"` and `"duke"`.
+Import and run the three notebooks `kaggle/vaib/step1a_download_ispy1.ipynb`, `step1b_download_ispy2.ipynb` and
+`step1c_download_duke.ipynb` (one cohort each, nothing to edit).
 Save each output as a Dataset named `mnj-raw-ispy1`, `mnj-raw-ispy2` and `mnj-raw-duke`. Three Datasets are
 needed only because a Kaggle notebook can save at most 20 GB of output; attached together they are the full set.
 

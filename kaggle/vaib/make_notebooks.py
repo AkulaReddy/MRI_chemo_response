@@ -101,7 +101,7 @@ What it shows:
    saturates the tumour.
 
 `WHAT = "demo"` (55 MB, a 7-patient sample) is enough to answer the question. **This is not the training data:**
-the full dataset is downloaded by `step1_download_full_dataset.ipynb`."""),
+the full dataset is downloaded by `step1a/1b/1c_download_*.ipynb`."""),
     code('''WHAT = "demo"      # "demo" (55 MB) | "ispy1" (1.25 GB) | "ispy2" (13.6 GB) | "duke" (8.6 GB)
 PARTS = 8          # parallel connections
 PID = None         # a patient to inspect, or None = first I-SPY patient found
@@ -551,14 +551,38 @@ json.dump({"runs": [os.path.basename(d.rstrip("/")) for d in main_runs], "val": 
     code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
 ]
 
-NOTEBOOKS = {"step0_demo_download_check.ipynb": NB00, "step1_download_full_dataset.ipynb": NB_STEP1,
+def step1_for(cohort, letter, size):
+    """step1 with COHORT fixed: one notebook per cohort, so each keeps its own output (Kaggle makes a Dataset
+    from a notebook's latest version only; re-running one notebook with another COHORT would replace it)."""
+    cells = [dict(c) for c in NB_STEP1]
+    cells[0] = md(f"""# Step 1{letter}: download the FULL {cohort.upper()} cohort ({size}) -> Dataset `mnj-raw-{cohort}`
+This is **1 of 3** download notebooks; together they are the full BreastDCEDL dataset (23.85 GB, 2,070 patients):
+`step1a_download_ispy1` (1.6 GB) + `step1b_download_ispy2` (13.6 GB) + `step1c_download_duke` (8.6 GB).
+A Kaggle notebook can save at most 20 GB, so the full set cannot come out of a single notebook.
+Import all three as **separate notebooks** and run them (in parallel is fine). Nothing needs editing.
+
+1. Kaggle -> **Create -> New Notebook -> File -> Import Notebook** -> this file.
+2. Session options: **Accelerator None**, **Internet ON**.
+3. **Save Version -> Save & Run All (Commit)**; you can close the browser.
+4. When finished: open the version -> **Output** -> log ends with `ALL MD5 OK` -> **New Dataset** named
+   **`mnj-raw-{cohort}`** (Private)."""
+    )
+    cells[1] = code(f'''COHORT = "{cohort}"     # fixed for this notebook; the other cohorts have their own step1 notebook
+PARTS = 8''')
+    return cells
+
+
+NOTEBOOKS = {"step0_demo_download_check.ipynb": NB00,
+             "step1a_download_ispy1.ipynb": step1_for("ispy1", "a", "1.6 GB incl. metadata + weights"),
+             "step1b_download_ispy2.ipynb": step1_for("ispy2", "b", "13.6 GB"),
+             "step1c_download_duke.ipynb": step1_for("duke", "c", "8.6 GB"),
              "step2_build_cache_v2.ipynb": NB02, "step3_input_diagnostics.ipynb": NB01,
              "step4_probe_sweep.ipynb": NB03, "step5_finetune_vit.ipynb": NB04}
 
 
 def main():
-    for old in HERE.glob("0*_*.ipynb"):        # earlier names of these notebooks (00_ ... 04_)
-        old.unlink()
+    for old in [*HERE.glob("0*_*.ipynb"), HERE / "step1_download_full_dataset.ipynb"]:   # earlier names
+        old.unlink(missing_ok=True)
     for name, cells in NOTEBOOKS.items():
         (HERE / name).write_text(json.dumps(notebook(cells), indent=1) + "\n", encoding="utf-8")
         print("wrote", name)
