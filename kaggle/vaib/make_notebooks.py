@@ -2,8 +2,10 @@
 
     python kaggle/vaib/make_notebooks.py
 
-00 is self-contained (no repo, no secret). 01-04 clone this repo at branch `vaib` with the team's SETUP cell
-(GITHUB_TOKEN Kaggle secret), so code changes only need a push to the branch, not a notebook edit.
+Run order: step1 (x3 cohorts) -> step2 (x3) -> step3 -> step4 -> step5; step0 is an optional quick check.
+step0 and step1 are self-contained (no repo, no secret). step2-5 need the repo code, either cloned from GitHub at
+branch `vaib` with the GITHUB_TOKEN Kaggle secret, or from an attached code Dataset (zip of the repo; see
+kaggle/vaib/README.md), because the repository is private.
 """
 import importlib.util
 import json
@@ -13,20 +15,62 @@ HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("team_nb", HERE.parent / "make_notebooks.py")
 team = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(team)
-md, code, notebook, SETUP = team.md, team.code, team.notebook, team.SETUP
+md, code, notebook = team.md, team.code, team.notebook
 BRANCH = "vaib"
+ROOT = HERE.parents[1]
+
+SETUP = r'''# ==== SETUP (do not edit): get the repo code, install requirements ====
+import base64, json, os, shutil, subprocess, sys
+assert PERSON in ("A", "B", "C"), 'set PERSON = "A", "B" or "C" in the parameters cell'
+_tok = None
+try:
+    from kaggle_secrets import UserSecretsClient
+    _tok = UserSecretsClient().get_secret("GITHUB_TOKEN")
+except Exception:
+    pass
+
+def git(*args, cwd="/tmp/repo"):
+    """git with the token as a one-off header (never stored in .git/config or the output)."""
+    if not _tok:
+        raise RuntimeError("no GITHUB_TOKEN secret: git push/pull is not available")
+    hdr = "Authorization: Basic " + base64.b64encode(f"x-access-token:{_tok}".encode()).decode()
+    r = subprocess.run(["git", "-c", f"http.extraHeader={hdr}", *args], cwd=cwd, capture_output=True, text=True)
+    out = (r.stdout + r.stderr).replace(_tok, "***")
+    if r.returncode:
+        raise RuntimeError(f"git {args[0]} failed:\n{out}")
+    return out
+
+shutil.rmtree("/tmp/repo", ignore_errors=True)
+if _tok:                                    # 1) clone the branch from GitHub
+    git("clone", "--quiet", "--depth", "1", "--branch", GIT_TAG, f"https://github.com/{REPO}.git", "/tmp/repo", cwd="/tmp")
+    print("code: GitHub", REPO, GIT_TAG, git("log", "-1", "--format=%h %s"))
+else:                                       # 2) or a code Dataset (zip of the repo) attached as input
+    import glob
+    hits = [h for d in range(1, 6) for h in glob.glob("/kaggle/input/" + "*/" * d + "src/vitonly/__init__.py")]
+    assert hits, ("no GITHUB_TOKEN secret and no code Dataset attached. Either add the secret (Add-ons -> Secrets) "
+                  "or attach the Dataset made from mnj-code-vaib.zip (see kaggle/vaib/README.md)")
+    code_root = os.path.dirname(os.path.dirname(os.path.dirname(hits[0])))
+    shutil.copytree(code_root, "/tmp/repo")
+    print("code: attached Dataset", code_root)
+os.chdir("/tmp/repo")
+sys.path.insert(0, "/tmp/repo")         # so `from src...` works in this kernel
+subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements-kaggle.txt"], check=True)
+import torch; print("torch", torch.__version__, "| GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "none")
+'''
 
 
 def params(extra):
     return code(f'''# ==== PARAMETERS (edit these) ====
 REPO = "{team.REPO_SLUG}"
 GIT_TAG = "{BRANCH}"           # branch (or tag) to clone
-PERSON = ""               # "A", "B" or "C": results go to results/<PERSON>/
+PERSON = ""               # "A", "B" or "C" (your role in the team): results go to results/<PERSON>/
 ''' + extra)
 
 
 PUSH = r'''# ==== PUSH the small result files to the vaib branch (results/<PERSON>/...) ====
-if PUSH_RESULTS:
+if PUSH_RESULTS and not _tok:
+    print("PUSH_RESULTS needs the GITHUB_TOKEN secret; download results/ from the Output tab instead")
+elif PUSH_RESULTS:
     git("config", "user.name", f"Person {PERSON} (Kaggle)")
     git("config", "user.email", "kaggle@users.noreply.github.com")
     for attempt in range(3):
@@ -45,7 +89,7 @@ if PUSH_RESULTS:
 
 # --------------------------------------------------------------------------------------------- 00
 NB00 = [
-    md("""# 00 Is BreastDCEDL downloadable? Download, verify, and look inside (CPU, ~5 min)
+    md("""# Step 0 (optional): is BreastDCEDL downloadable? Download, verify, look inside (CPU, ~5 min)
 **Self-contained:** no repo and no GitHub secret. Session options: Accelerator **None**, Internet **ON**.
 
 What it shows:
@@ -56,8 +100,8 @@ What it shows:
 3. How a 3D scan becomes the 2D RGB slices the ViT sees, and why the original joint 99.5th-percentile clipping
    saturates the tumour.
 
-`WHAT = "demo"` (55 MB, 7 patients from all 3 cohorts) is enough to answer the question. `"ispy1"` (1.25 GB) is
-the smallest full cohort (~20 min). The team's full downloads are in `kaggle/00_download_zenodo.py`."""),
+`WHAT = "demo"` (55 MB, a 7-patient sample) is enough to answer the question. **This is not the training data:**
+the full dataset is downloaded by `step1_download_full_dataset.ipynb`."""),
     code('''WHAT = "demo"      # "demo" (55 MB) | "ispy1" (1.25 GB) | "ispy2" (13.6 GB) | "duke" (8.6 GB)
 PARTS = 8          # parallel connections
 PID = None         # a patient to inspect, or None = first I-SPY patient found
@@ -218,11 +262,48 @@ print(f"{z1 - z0} tumour slices -> {z1 - z0} 2D RGB images for this patient; the
 '''),
 ]
 
+# --------------------------------------------------------------------------------------------- step 1
+_DL = (ROOT / "scripts" / "download_breastdcedl.py").read_text().split('\nif __name__ == "__main__":')[0]
+NB_STEP1 = [
+    md("""# Step 1: download the FULL BreastDCEDL dataset into Kaggle (CPU, no GPU, no secret)
+All 2,070 patients from Zenodo record 18114231 (CC BY-NC 4.0, no login): I-SPY1 172, I-SPY2 982, Duke 916.
+A Kaggle notebook can save at most 20 GB of output, and the full set is 23.85 GB. So run this notebook
+**three times**, once per cohort; the three Datasets attached together are the full dataset.
+
+| run | `COHORT` | files | size | time (~1-3 MB/s) | save the output as Dataset |
+|---|---|---|---|---|---|
+| 1 | `"ispy1"` | I-SPY1 archive + metadata CSV + authors' ViT weights | 1.6 GB | ~15-30 min | **`mnj-raw-ispy1`** |
+| 2 | `"ispy2"` | I-SPY2 archive (982 patients) | 13.6 GB | ~2-4 h | **`mnj-raw-ispy2`** |
+| 3 | `"duke"` | Duke archive (916 patients) | 8.6 GB | ~1.5-3 h | **`mnj-raw-duke`** |
+
+How to run:
+1. Kaggle -> **Create -> New Notebook -> File -> Import Notebook** -> upload this `.ipynb`.
+2. Session options (right panel): **Accelerator None**, **Internet ON** (needs a phone-verified account).
+3. Set `COHORT` below, then **Save Version -> Save & Run All (Commit)**. It keeps running with the browser closed.
+4. When the version has finished: open it -> **Output** tab -> check the log ends with `ALL MD5 OK` ->
+   **New Dataset** -> name from the table -> Private. You can do the three runs in parallel.
+5. If a run stops at Kaggle's 12 h limit, run it again. Finished files are skipped, but parts are not kept
+   between sessions, so a very slow I-SPY2 run starts over. That is rare at Kaggle speeds.
+
+If your teammates already made `mnj-raw-ispy1/-ispy2/-duke`, ask them to share those instead (same files)."""),
+    code('''COHORT = "ispy1"     # "ispy1", then "ispy2", then "duke" (one per run)
+PARTS = 8            # parallel connections to Zenodo
+'''),
+    code(_DL),
+    code('''files = {"ispy1": ["ispy1", "meta", "models"], "ispy2": ["ispy2"], "duke": ["duke"]}[COHORT]
+ok = main(["--out", "/kaggle/working" if os.path.isdir("/kaggle/working") else "BreastDCEDL", "--files", *files,
+           "--parts", str(PARTS)])
+assert ok, "some files are incomplete: run the notebook again"
+print(f"next: save this output as the Dataset mnj-raw-{COHORT}")
+'''),
+]
+
 # --------------------------------------------------------------------------------------------- 01
 NB01 = [
-    md("""# 01 Input diagnostics: what does the ViT actually see? (CPU, ~15 min)
-1. Session options: Accelerator **None**, Internet **ON**, secret `GITHUB_TOKEN`.
-2. **+ Add Input**: the existing caches `mnj-cache-ispy1/-ispy2/-duke` (v1) and/or `mnj-cache2-*` (v2, from notebook 02).
+    md("""# Step 3: input diagnostics on the full dataset: what does the ViT actually see? (CPU, ~15 min)
+1. Session options: Accelerator **None**, Internet **ON**, secret `GITHUB_TOKEN` (or attach the code Dataset).
+2. **+ Add Input**: `mnj-cache2-ispy1`, `mnj-cache2-ispy2`, `mnj-cache2-duke` (from step 2). The team's v1 caches
+   `mnj-cache-*` also work, and attaching both lets you compare.
 
 Measures, on **training patients only**:
 - **Saturation:** how much of the tumour is clipped to white by the v1 joint 99.5th-percentile scaling, and by
@@ -308,19 +389,22 @@ print("Reference: the old B3 ViT reached val AUC 0.530; clinical-only LR (B0) 0.
 
 # --------------------------------------------------------------------------------------------- 02
 NB02 = [
-    md("""# 02 Build the raw-intensity cache v2 (CPU, ~20-60 min per cohort)
+    md("""# Step 2: build the training cache from the full raw dataset (CPU, ~20-60 min per cohort, run x3)
 Why: the v1 cache stored uint8 clipped at the volume's 99.5th percentile, which saturates much of the tumour,
 and it fixes one normalisation. v2 stores the raw values (float16) of the tumour slices, the full 256 plane and
 whole-volume statistics. Every normalisation can then be chosen at training time without a rebuild. Only
-pCR-labeled patients are written by default.
+pCR-labeled patients (1,452 of 2,070) are written by default. The other 618, mostly Duke, have no pCR outcome,
+so they can be neither trained on nor scored; `ALL_PATIENTS = True` includes them anyway.
 
-1. Session options: Accelerator **None**, Internet **ON**, secret `GITHUB_TOKEN`.
-2. **+ Add Input** -> the raw Dataset of the cohort (`mnj-raw-ispy1`, `mnj-raw-ispy2` or `mnj-raw-duke`).
-3. Set `COHORT`, then **Save Version -> Save & Run All (Commit)**.
-4. When it finishes: **New Dataset** from the output, named **`mnj-cache2-<cohort>`** (Private, shared).
-   Expected size: I-SPY1 ~2 GB, Duke ~4 GB, I-SPY2 ~10 GB (Kaggle's output limit is 20 GB)."""),
+1. Session options: Accelerator **None**, Internet **ON**, secret `GITHUB_TOKEN` (or attach the code Dataset).
+2. **+ Add Input** -> the raw Dataset of the cohort from step 1 (`mnj-raw-ispy1`, `mnj-raw-ispy2` or `mnj-raw-duke`;
+   `breastdcedl-full` if you uploaded everything as one Dataset).
+3. Set `COHORT`, then **Save Version -> Save & Run All (Commit)**. Run it three times (ispy1, ispy2, duke).
+4. When it finishes: **New Dataset** from the output, named **`mnj-cache2-<cohort>`** (Private).
+   Measured size per cohort (labeled / all): I-SPY1 1.1 / 1.1 GB, I-SPY2 8.2 / 8.2 GB, Duke 2.1 / 5.2 GB."""),
     params('''COHORT = "ispy1"        # "ispy1", "ispy2" or "duke"
-LIMIT = 0                # 0 = all labeled patients; 10 for a quick check
+LIMIT = 0                # 0 = every patient (full cohort); 10 only for a quick check
+ALL_PATIENTS = False     # True: also the patients without a pCR label (Duke 916 instead of 298)
 RAW = ""                 # leave "" to find the BreastDCEDL_<COHORT>_min_crop input automatically
 '''),
     code(SETUP),
@@ -337,6 +421,7 @@ RAW = ""                 # leave "" to find the BreastDCEDL_<COHORT>_min_crop in
 OUT = f"/kaggle/working/cache2_{COHORT}"
 cmd = [sys.executable, "scripts/build_cache_v2.py", "--cohort", COHORT, "--raw", RAW, "--out", OUT, "--workers", "4"]
 if LIMIT: cmd += ["--limit", str(LIMIT)]
+if ALL_PATIENTS: cmd.append("--all-patients")
 print(" ".join(cmd)); subprocess.run(cmd, check=True)
 '''),
     code(r'''import pandas as pd
@@ -351,14 +436,15 @@ display(idx[idx.status == "error"].head(20))
 
 # --------------------------------------------------------------------------------------------- 03
 NB03 = [
-    md("""# 03 Frozen-feature probe: which normalisation x crop x backbone carries pCR signal? (GPU, ~20-30 min)
+    md("""# Step 4: frozen-feature probe: which normalisation x crop x backbone carries pCR signal? (GPU, ~30 min)
 Fine-tuning one ViT costs ~30 min and its val AUC is noisy (177 patients, 95% CI about +-0.08). So first,
 every input variant goes through **frozen** backbones. Each patient's slice features are averaged and an L2
 logistic regression is fitted. Variants are ranked by **5-fold CV AUC on the ~1,100 training patients** (low
-variance), and val AUC is shown as a confirmation. The best rows tell notebook 04 what to fine-tune.
+variance), and val AUC is shown as a confirmation. The best rows tell step 5 what to fine-tune.
 
-1. Session options: **GPU T4 x2** (backbones are spread over both GPUs), Internet **ON**, secret `GITHUB_TOKEN`.
-2. **+ Add Input**: `mnj-cache2-*` (preferred) or the v1 caches `mnj-cache-*`, for all three cohorts.
+1. Session options: **GPU T4 x2** (backbones are spread over both GPUs), Internet **ON**, secret `GITHUB_TOKEN`
+   (or attach the code Dataset).
+2. **+ Add Input**: `mnj-cache2-ispy1`, `mnj-cache2-ispy2`, `mnj-cache2-duke` (all three = all labeled patients).
 3. First run: `LIMIT = 60` (a few minutes) to check everything works, then `LIMIT = 0`, Save & Run All."""),
     params('''BACKBONES = ["mae", "dinov2_b"]   # also: "vit_sup", "dino_b16", "dinov2_s"
 NORMS = ["joint_pct", "joint_wide", "per_phase", "joint_tumor", "pre_ref", "zscore", "sub", "kinetic", "early3"]
@@ -391,7 +477,7 @@ plt.axvline(float(ref[ref["pool"] == "cohort_only"].cv_auc.iloc[0]), color="grey
 plt.xlabel("best 5-fold CV AUC on train"); plt.legend(); plt.tight_layout(); plt.show()
 top = df[df.backbone != "-"].iloc[0]
 print(f"TOP: backbone={top.backbone} norm={top.norm} crop={top.crop} pool={top['pool']} "
-      f"cv {top.cv_auc:.3f}, val {top.val_auc:.3f} -> use in notebook 04")
+      f"cv {top.cv_auc:.3f}, val {top.val_auc:.3f} -> use in step 5")
 os.makedirs(f"/kaggle/working/results/{PERSON}/{os.path.basename(OUTD)}", exist_ok=True)
 for f in ("probe_results.csv", "probe_val_preds.csv"):
     shutil.copy(f"{OUTD}/{f}", f"/kaggle/working/results/{PERSON}/{os.path.basename(OUTD)}/{f}")
@@ -401,8 +487,8 @@ for f in ("probe_results.csv", "probe_val_preds.csv"):
 
 # --------------------------------------------------------------------------------------------- 04
 NB04 = [
-    md("""# 04 Fine-tune the improved ViT image-only model (GPU, ~30 min per seed)
-Uses the best input from notebook 03. Changes from B3 (val AUC 0.530), all in `configs/vo_base.yaml`:
+    md("""# Step 5: fine-tune the improved ViT image-only model (GPU, ~30 min per seed)
+Uses the best input from step 4. Changes from B3 (val AUC 0.530), all in `configs/vo_base.yaml`:
 - **v2 cache:** the tumour is not clipped (in v1, roughly half of the I-SPY tumour was pure white).
 - **Normalisation** (`NORM`) and **tumour-zoom crop**: the tumour fills ~60% of the input instead of ~20-40%.
 - **Central tumour slices** instead of every slice down to edge slivers.
@@ -413,10 +499,11 @@ Uses the best input from notebook 03. Changes from B3 (val AUC 0.530), all in `c
 `RUN_CONTROL = True` also runs `vo_b3_repro`, the old B3 recipe through this code. It should land near 0.53,
 which shows that any gain comes from the changes rather than the new code.
 
-1. Session options: **GPU T4 x2 or P100**, Internet **ON**, secret `GITHUB_TOKEN`; attach `mnj-cache2-*` (or `mnj-cache-*`).
+1. Session options: **GPU T4 x2 or P100**, Internet **ON**, secret `GITHUB_TOKEN` (or the code Dataset);
+   attach `mnj-cache2-ispy1`, `mnj-cache2-ispy2`, `mnj-cache2-duke`.
 2. First `DEBUG = True` (2 epochs, 48 patients), then the real run: **Save & Run All (Commit)**."""),
     params('''CONFIG = "vo_base"          # vo_base | vo_dinov2 | vo_b3_repro
-NORM = "kinetic"            # from notebook 03's top rows
+NORM = "kinetic"            # from step 4's top rows
 CROP = "tumor"
 BACKBONE = "mae"            # mae | dinov2_b | vit_sup | dino_b16 | dinov2_s
 SEEDS = [0, 1, 2]
@@ -464,11 +551,14 @@ json.dump({"runs": [os.path.basename(d.rstrip("/")) for d in main_runs], "val": 
     code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
 ]
 
-NOTEBOOKS = {"00_download_check.ipynb": NB00, "01_input_diagnostics.ipynb": NB01, "02_build_cache_v2.ipynb": NB02,
-             "03_probe_sweep.ipynb": NB03, "04_finetune_vit.ipynb": NB04}
+NOTEBOOKS = {"step0_demo_download_check.ipynb": NB00, "step1_download_full_dataset.ipynb": NB_STEP1,
+             "step2_build_cache_v2.ipynb": NB02, "step3_input_diagnostics.ipynb": NB01,
+             "step4_probe_sweep.ipynb": NB03, "step5_finetune_vit.ipynb": NB04}
 
 
 def main():
+    for old in HERE.glob("0*_*.ipynb"):        # earlier names of these notebooks (00_ ... 04_)
+        old.unlink()
     for name, cells in NOTEBOOKS.items():
         (HERE / name).write_text(json.dumps(notebook(cells), indent=1) + "\n", encoding="utf-8")
         print("wrote", name)

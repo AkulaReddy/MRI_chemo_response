@@ -1,0 +1,5 @@
+# The data itself (~24 GB) never goes into git. Only these instructions are tracked.
+*
+!.gitignore
+!README.md
+!dataset-metadata.json

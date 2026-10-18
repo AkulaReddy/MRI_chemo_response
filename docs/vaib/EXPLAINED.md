@@ -113,9 +113,14 @@ targets from the literature are ~0.65–0.72 (Nishizawa MRI-only: 0.68 internal)
 | **B3 control config** | `configs/vo_b3_repro.yaml` | the old recipe through the new code; should land near 0.53 |
 
 ## 8. How to run (Kaggle)
-See `kaggle/vaib/README.md`. In short: 00 (download check, no secrets) → 01 (diagnostics on the existing v1
-caches, CPU) → 02 (build `mnj-cache2-*`, CPU, once per cohort) → 03 (probe, GPU ~30 min) → 04 (fine-tune the top
-probe setting, 3 seeds + ensemble, GPU ~1.5 h).
+See `kaggle/vaib/README.md`. All steps use the full real dataset:
+1. step1: download the full release into Kaggle (×3 cohorts → `mnj-raw-*`).
+2. step2: build `mnj-cache2-*` (×3, CPU).
+3. step3: diagnostics (CPU).
+4. step4: probe (GPU, ~30 min).
+5. step5: fine-tune the top probe setting, 3 seeds + ensemble (GPU, ~1.5 h).
+
+step0 is an optional look at the 7-patient demo sample.
 
 ## 9. Honest expectations
 - No new AUC is claimed here: real numbers need the Kaggle runs. The fixes target measured input defects, so the

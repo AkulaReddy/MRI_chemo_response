@@ -1,29 +1,69 @@
-# Branch `vaib` notebooks: improving the ViT image-only model
+# Branch `vaib`: run the improved ViT-only pipeline on Kaggle with the FULL real dataset
 
-New notebooks only; the team's `kaggle/*.ipynb` are unchanged. Background and findings: `docs/vaib/EXPLAINED.md`.
-Regenerate after editing: `python kaggle/vaib/make_notebooks.py`.
+Everything here runs on the **real BreastDCEDL data**: all 2,070 patients, of which 1,452 have pCR labels.
+Synthetic data is used only by the local unit tests (`tests/`), which need no download. Background and
+findings: `docs/vaib/EXPLAINED.md`. The team's `kaggle/*.ipynb` are unchanged.
 
-Notebooks 01–04 clone this repo at `GIT_TAG = "vaib"` with the `GITHUB_TOKEN` Kaggle secret (as the team's do).
-Set `PERSON` ("A"/"B"/"C"); results are written to `results/<PERSON>/`, and pushed to the `vaib` branch only if
-`PUSH_RESULTS = True`.
+## What goes to Kaggle
+**Notebooks.** Upload with Kaggle -> Create -> New Notebook -> File -> Import Notebook.
 
-| # | notebook | accelerator | inputs to attach | time | output |
+| step | notebook (this folder) | accelerator | attach as input | runs | save output as Dataset |
 |---|---|---|---|---|---|
-| 00 | `00_download_check` | None, Internet ON, **no secret** | – | ~5 min (demo) | answers "is it downloadable"; one patient from raw NIfTI to RGB slice |
-| 01 | `01_input_diagnostics` | None | `mnj-cache-*` (v1) and/or `mnj-cache2-*` | ~15 min | saturation per normalisation, tumour size in the input, gallery, hand-crafted kinetic AUC |
-| 02 | `02_build_cache_v2` (once per cohort) | None | `mnj-raw-<cohort>` | 20–60 min | save the output as Dataset **`mnj-cache2-<cohort>`** (~2 / 10 / 4 GB) |
-| 03 | `03_probe_sweep` | GPU T4 ×2 | `mnj-cache2-*` (or v1) | ~30 min (`LIMIT=60` first) | `probe_results.csv`: norm × crop × backbone ranked by CV AUC |
-| 04 | `04_finetune_vit` | GPU T4 / P100 | `mnj-cache2-*` (or v1) | ~30 min per seed (`DEBUG=True` first) | per-seed runs + 3-seed ensemble val AUC |
+| 0 (optional) | `step0_demo_download_check.ipynb` | None | – | 1 | – (a 7-patient sample, just to see the data) |
+| **1** | `step1_download_full_dataset.ipynb` | None | – | **3** (`COHORT` = ispy1, ispy2, duke) | `mnj-raw-ispy1`, `mnj-raw-ispy2`, `mnj-raw-duke` |
+| **2** | `step2_build_cache_v2.ipynb` | None | the matching `mnj-raw-<cohort>` + code | **3** | `mnj-cache2-ispy1`, `mnj-cache2-ispy2`, `mnj-cache2-duke` |
+| **3** | `step3_input_diagnostics.ipynb` | None | all 3 `mnj-cache2-*` + code | 1 | – |
+| **4** | `step4_probe_sweep.ipynb` | GPU T4 x2 | all 3 `mnj-cache2-*` + code | 1 | – (read the TOP line) |
+| **5** | `step5_finetune_vit.ipynb` | GPU T4 x2 / P100 | all 3 `mnj-cache2-*` + code | 1 | – (results in Output) |
 
-Order: 00 → 01 (works on the existing v1 caches today) → 02 ×3 → 03 → put the top row of 03 into 04
-(`NORM`, `CROP`, `BACKBONE`) → 04. Optionally set `RUN_CONTROL = True` in 04: it runs the old B3 recipe through the
-new code, which should give ~0.53.
+Every notebook needs **Internet ON** (Session options; requires a phone-verified Kaggle account).
 
-Without v2 caches, 03 and 04 still run on the v1 caches. But v1 has already clipped the tumour, so `joint_wide`
-equals `joint_pct`, and the other normalisations work from clipped values.
+**Datasets.** You create them yourself from the notebook outputs (all Private):
+- `mnj-raw-ispy1` (1.6 GB), `mnj-raw-ispy2` (13.6 GB), `mnj-raw-duke` (8.6 GB): together these are the full raw
+  release, 23.85 GB, all 2,070 patients. Three Datasets are needed only because one Kaggle notebook can save at
+  most 20 GB.
+- `mnj-cache2-ispy1` (1.1 GB), `mnj-cache2-ispy2` (8.2 GB), `mnj-cache2-duke` (2.1 GB): every pCR-labeled
+  patient, ready for training.
+- If your teammates already have `mnj-raw-*`, they can share those instead, and you skip step 1.
 
-Overrides in `EXTRA` use the config keys in `configs/vo_base.yaml`, e.g. `"model.train_blocks=6"`. Write numbers
-with a decimal point (`3.0e-5`); YAML reads `3e-5` as text, although finetune.py converts it.
+**The repo code** (steps 2-5). The GitHub repo is private, so choose one:
+- **(a) GitHub token:** Kaggle notebook -> Add-ons -> Secrets -> add `GITHUB_TOKEN` (a GitHub personal access
+  token with read access to the repo). The notebook clones branch `vaib`.
+- **(b) No token:** upload the code as a Dataset. On your laptop:
+  `git -C MRI_chemo_response archive --format=zip --prefix=MRI_chemo_response/ -o mnj-code-vaib.zip vaib`
+  (a ready copy is in `../kaggle_upload/`, next to the repo). Then Kaggle -> Datasets -> New Dataset -> upload
+  the zip -> name `mnj-code-vaib` -> attach it to every step-2-5 notebook.
+  Make a new zip after every `git pull` of `vaib`.
 
-Local checks: `python -m pytest -q tests/test_vitonly.py`. All five notebooks were executed end to end locally:
-00 on the real demo archive; 01, 03 and 04 on synthetic v2 caches with tiny random ViTs.
+In every step-2-5 notebook set `PERSON` ("A", "B" or "C", your role in the team) in the first cell.
+
+## Order and timing
+1. **step1** x3, in parallel: ~30 min (I-SPY1), ~2-4 h (I-SPY2), ~1.5-3 h (Duke). Check that the log ends with
+   `ALL MD5 OK`, then New Dataset from the Output.
+2. **step2** x3, each with its `mnj-raw-*` attached: 20-60 min each. New Dataset `mnj-cache2-<cohort>`.
+   Leave `LIMIT = 0` (= every patient). `ALL_PATIENTS = True` also stores the 618 patients without a pCR label;
+   they are not used for training or scoring.
+3. **step3** (optional but recommended for the report): saturation, tumour size and the hand-crafted signal check.
+4. **step4:** first a quick run with `LIMIT = 60` (a few minutes), then `LIMIT = 0` (~30 min). The last line prints
+   `TOP: backbone=... norm=... crop=...`.
+5. **step5:** copy the TOP values into `BACKBONE`, `NORM` and `CROP`. First run with `DEBUG = True` (minutes),
+   then `DEBUG = False` (3 seeds, ~1.5 h) with Save Version -> Save & Run All (Commit). `RUN_CONTROL = True`
+   also runs the old B3 recipe as a check (~0.53).
+
+`LIMIT` and `DEBUG` are the only settings that use part of the data, and only for quick checks. With
+`LIMIT = 0` / `DEBUG = False` every patient in the train and val splits is used. The test split is never
+used, by design.
+
+## Option: download on your laptop instead of step 1
+`python scripts/download_breastdcedl.py` downloads the full release into `datasets/BreastDCEDL/`. It resumes
+and checks md5, and that folder is ignored by git. Then upload it as one Dataset with the Kaggle CLI (see
+`datasets/BreastDCEDL/README.md`) and attach that one Dataset in step 2. At the measured 0.23 MB/s this takes
+more than a day, so step 1 on Kaggle is much faster.
+
+## Checked locally (2026-10-18)
+- step1: real Zenodo downloads (metadata CSV + demo archive), md5 OK.
+- step0 and step2: run on real patients from the demo archive.
+- step3-5: run end to end on synthetic caches with tiny models, through the real SETUP cell (code-Dataset route).
+- `python -m pytest -q tests`: 42 passed.
+
+Regenerate the notebooks after editing: `python kaggle/vaib/make_notebooks.py`.
