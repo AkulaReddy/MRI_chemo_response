@@ -1,0 +1,17 @@
+# Control: the old B3 recipe (b3_vit.yaml) run through src/vitonly, to check this code reproduces ~0.53
+# before crediting any gain to the new inputs. Works on v1 or v2 caches (v2 + joint_pct = v1 images).
+inherit: vo_base.yaml
+data:
+  norm: joint_pct
+  crop: fixed
+  slice_mode: even
+  k_eval: 16
+model:
+  pool: cls
+loss:
+  bce_weight: 0.5
+  focal_weight: 0.5
+optim:
+  freeze_epochs: 0
+  max_epochs: 30
+  patience: 8

@@ -1,0 +1,45 @@
+# Improved ViT image-only (branch vaib; python -m src.vitonly.finetune). Not used by src/train.py.
+# Set norm / crop / backbone from the probe (kaggle/vaib/03) via --set, e.g. data.norm=kinetic.
+data:
+  cohorts: [ispy1, ispy2, duke]
+  prefer_cache: v2      # v2 = raw float16 (mnj-cache2-*); v1 = uint8 (mnj-cache-*), used if v2 is absent
+  norm: kinetic         # joint_pct | joint_wide | per_phase | joint_tumor | pre_ref | zscore | sub | kinetic | early3
+  crop: tumor           # fixed (v1 behaviour) | tumor (zoom on the box) | mm (fixed field of view)
+  zoom: 1.6             # tumor crop: side = zoom x longer box side (>= 64 px)
+  fov_mm: 100           # mm crop
+  slice_mode: mid       # even (all tumour slices) | mid (central mid_frac) | area (largest mask area)
+  mid_frac: 0.6
+  k_train: 8
+  k_eval: 12
+  num_workers: 4
+  sampler: random       # random | balanced
+model:
+  backbone: mae         # mae | vit_sup | dino_b16 | dinov2_s | dinov2_b
+  pool: gap             # gap (patch-token mean) | cls | both
+  aggregation: mean_logit   # mean_logit | mean | mil
+  train_blocks: 4
+  grad_checkpointing: true
+  dropout: 0.2
+loss:
+  bce_weight: 1.0
+  focal_weight: 0.0
+  focal_gamma: 2.0
+  pos_weight: null
+optim:
+  lr_head: 1.0e-3
+  lr_backbone: 3.0e-5
+  layer_decay: 0.75
+  weight_decay: 0.05
+  warmup_epochs: 1
+  freeze_epochs: 2      # LP-FT: head only for 2 epochs, then the top blocks unfreeze
+  max_epochs: 20
+  patience: 6
+  batch_patients: 8
+  amp: true
+  grad_clip: 1.0
+aug:
+  flip: true
+  rotate_deg: 15
+  scale: [0.9, 1.1]
+  intensity: 0.1
+  crop_jitter: 8

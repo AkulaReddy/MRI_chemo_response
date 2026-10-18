@@ -1,0 +1,6 @@
+# DINOv2-B/14 backbone (self-distilled, strong frozen features). Lower backbone LR, as recommended for DINOv2.
+inherit: vo_base.yaml
+model:
+  backbone: dinov2_b
+optim:
+  lr_backbone: 1.0e-5
