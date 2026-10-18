@@ -21,7 +21,9 @@ ROOT = HERE.parents[1]
 
 SETUP = r'''# ==== SETUP (do not edit): get the repo code, install requirements ====
 import base64, json, os, shutil, subprocess, sys
-assert PERSON in ("A", "B", "C"), 'set PERSON = "A", "B" or "C" in the parameters cell'
+if PERSON not in ("A", "B", "C"):           # only names the results folder
+    PERSON = "vaib"
+    print('PERSON not set: results go to results/vaib/ (set PERSON = "A", "B" or "C" to change)')
 _tok = None
 try:
     from kaggle_secrets import UserSecretsClient
@@ -63,7 +65,7 @@ def params(extra):
     return code(f'''# ==== PARAMETERS (edit these) ====
 REPO = "{team.REPO_SLUG}"
 GIT_TAG = "{BRANCH}"           # branch (or tag) to clone
-PERSON = ""               # "A", "B" or "C" (your role in the team): results go to results/<PERSON>/
+PERSON = ""               # optional: "A", "B" or "C" -> results/<PERSON>/ (empty -> results/vaib/)
 ''' + extra)
 
 
