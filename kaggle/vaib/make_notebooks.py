@@ -568,6 +568,474 @@ json.dump({"runs": [os.path.basename(d.rstrip("/")) for d in main_runs], "val": 
     code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
 ]
 
+# ---------------------------------------------------------------------------------- steps 6-8 (update 2)
+HELPERS = r'''# ==== HELPERS (do not edit): training runs, prediction files, comparisons ====
+import glob, time
+import numpy as np, pandas as pd, matplotlib.pyplot as plt
+from src import evaluation as ev, stats
+from src.train import find_caches
+from src.data.metadata import patient_table
+COH = ["ispy1", "ispy2", "duke"]
+OUT = f"/kaggle/working/results/{PERSON}/{STEP}"
+os.makedirs(OUT, exist_ok=True)
+T0 = time.time()
+RUNS_JSON = {}
+pd.set_option("display.width", 250, "display.max_columns", 40)
+
+def budget_left():
+    return TIME_BUDGET_H - (time.time() - T0) / 3600
+
+def check_caches(version):
+    caches = find_caches(["/kaggle/input", "/kaggle/working"])
+    info = {c: json.load(open(f"{d}/cache_meta.json")).get("builder_version", 1) for c, d in caches.items()}
+    print("caches:", {c: f"builder v{v}: {caches[c]}" for c, v in info.items()})
+    if version is not None:
+        bad = {c: v for c, v in info.items() if v != version}
+        assert not bad and len(info) == 3, (f"need cache builder v{version} for all 3 cohorts (attach mnj-cache-v2); "
+                                            f"found {info}")
+    return caches
+
+def _copy(d, label):
+    os.makedirs(f"{OUT}/{label}", exist_ok=True)
+    for f in ("val_preds.csv", "metrics.json", "log.csv", "config_resolved.yaml", "export_preds.csv"):
+        if os.path.exists(f"{d}/{f}"):
+            shutil.copy(f"{d}/{f}", f"{OUT}/{label}/{f}")
+
+def train(config, seed, sets=(), label=None, cohorts=None):
+    """One src.train run (B3 / F2 ...) -> (run_dir, metrics). Its small files are copied to OUT/<label>/."""
+    cmd = [sys.executable, "-m", "src.train", "--config", config, "--seed", str(seed), "--out", "/kaggle/working/runs"]
+    if CACHE_VERSION is not None: cmd += ["--cache-version", str(CACHE_VERSION)]
+    if cohorts: cmd += ["--cohorts", *cohorts]
+    if DEBUG: cmd.append("--debug")
+    if sets: cmd += ["--set", *sets]
+    print("\n" + " ".join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
+    d = max(glob.glob("/kaggle/working/runs/*/"), key=os.path.getmtime).rstrip("/")
+    if label: _copy(d, label)
+    return d, json.load(open(f"{d}/metrics.json"))
+
+def finetune(config, seed, sets=(), label=None):
+    """One src.vitonly.finetune run (this branch's ViT-only model) -> run_dir."""
+    cmd = [sys.executable, "-m", "src.vitonly.finetune", "--config", config, "--seed", str(seed),
+           "--cache-root", "/kaggle/input", "/kaggle/working", "--out", "/kaggle/working/runs"]
+    if DEBUG: cmd.append("--debug")
+    if sets: cmd += ["--set", *sets]
+    print("\n" + " ".join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
+    d = max(glob.glob("/kaggle/working/runs/*/"), key=os.path.getmtime).rstrip("/")
+    if label: _copy(d, label)
+    return d
+
+def note_runs(key, dirs):
+    """label -> run folder names, in OUT/runs.json: step 8 uses it to find the checkpoints."""
+    RUNS_JSON[key] = [os.path.basename(d) for d in dirs]
+    json.dump(RUNS_JSON, open(f"{OUT}/runs.json", "w"), indent=1)
+
+def preds_of(dirs):
+    fr = [ev.load_preds(f"{d}/val_preds.csv") for d in dirs]
+    return fr[0] if len(fr) == 1 else ev.ensemble(fr)
+
+def save_preds(label, df):
+    os.makedirs(f"{OUT}/{label}", exist_ok=True)
+    df.to_csv(f"{OUT}/{label}/val_preds.csv", index=False)
+    return df
+
+def repo_preds(pattern):
+    hits = sorted(glob.glob(f"results/*/{pattern}/val_preds.csv"))
+    return preds_of([os.path.dirname(h) for h in hits]) if hits else None
+
+def train_auc(d):
+    """AUC on the training patients from export_preds.csv (B3 exports after training): the overfitting gap."""
+    f = f"{d}/export_preds.csv"
+    if not os.path.exists(f): return np.nan
+    e = pd.read_csv(f); e = e[e.split == "train"]
+    return stats.auc(e.label, e.prob)
+
+def compare(preds, ref):
+    """One row per model on the patients all models share: AUC (DeLong CI), AUPRC, Brier, ECE, the 90%-spec
+    operating point (threshold chosen on these same val patients: optimistic), and the paired DeLong test
+    and paired bootstrap of the AUC difference vs `ref`."""
+    preds = ev.align({k: v for k, v in preds.items() if v is not None})
+    rows = []
+    for k, d in preds.items():
+        r = {"model": k, **ev.summary_row(d.label, d.prob)}
+        if k != ref and ref in preds:
+            y = preds[ref].label
+            dl = ev.delong(y, preds[ref].prob, d.prob)
+            pb = stats.paired_bootstrap_auc_diff(y, preds[ref].prob, d.prob)
+            r.update(diff_vs_ref=dl["diff"], delong_ci_lo=dl["ci"][0], delong_ci_hi=dl["ci"][1], delong_p=dl["p"],
+                     boot_p=pb["p"])
+        rows.append(r)
+    cols = ["model", "n", "pcr", "auc", "ci_lo", "ci_hi", "auprc", "brier", "ece", "sens@90spec", "ppv@90spec",
+            "npv@90spec", "diff_vs_ref", "delong_ci_lo", "delong_ci_hi", "delong_p", "boot_p"]
+    t = pd.DataFrame(rows)
+    return t[[c for c in cols if c in t]]
+
+def subtype_wide(preds, by="subtype"):
+    """AUC (95% CI) per subtype (or cohort) for every model, all on the same patients; n / pCR+ per group."""
+    preds = ev.align({k: v for k, v in preds.items() if v is not None})
+    tabs = {k: ev.subgroup_table(d, by).set_index(by) for k, d in preds.items()}
+    first = next(iter(tabs.values()))
+    out = pd.DataFrame({"n": first.n.astype(int), "pCR+": first.pcr.astype(int)})
+    for k, t in tabs.items():
+        out[k] = [f"{a:.3f} ({lo:.2f}-{hi:.2f})" if a == a else "n/a (one class)"
+                  for a, lo, hi in zip(t.auc, t.ci_lo, t.ci_hi)]
+    return out
+
+B1_VAL = repo_preds("b1_lr_s0_*")                       # clinical + tumour size, logistic regression (val 0.653)
+B0_VAL = repo_preds("b0_lr_s0_*")                       # clinical only (val 0.639)
+AKULA_B3_V2 = repo_preds("b3_vit_s0_1019-0302_*")       # Akula's B3 on cache v2 (val 0.559)
+B3_V1 = repo_preds("b3_vit_s0_1009-1616_*")             # B3 on the old cache (val 0.530)
+F2_V1 = repo_preds("f2_attn_s0_1009-1605_*")            # fusion on the old cache (val 0.690)
+print("reference predictions from the repo:", {k: v is not None for k, v in
+      dict(B1=B1_VAL, B0=B0_VAL, B3_v2_Akula=AKULA_B3_V2, B3_v1=B3_V1, F2_v1=F2_V1).items()})
+'''
+
+ATTACH = """Kaggle setup: Accelerator **GPU T4 x2** (one GPU is used), Internet **ON**. **+ Add Input**:
+- **`mnj-cache-v2`** (Akula's builder-v2 cache, all 3 cohorts). With `CACHE_VERSION = 2` the run stops if
+  another cache is picked.
+- the code: the `mnj-code-vaib` Dataset (upload the new zip as a **new version** first) or the `GITHUB_TOKEN` secret.
+
+Use **Save Version -> Save & Run All (Commit)**: these runs take hours and continue with the browser closed.
+Results go to the Output tab under `results/<PERSON>/<step>/`. Keep this notebook's output: step 8 reads it."""
+
+NB06 = [
+    md("""# Step 6: reproduce Akula's cache-v2 result, then our ViT-only model on cache v2 (GPU, ~3 h)
+Akula's update: B3 (ViT image-only, `b3_vit`, seed 0) on cache v2 gave **val AUC 0.559** (old cache: 0.530).
+1. **B3 reproduction:** the same procedure (`b3_vit`, seed 0, cache v2, no overrides) and a paired
+   comparison with his committed predictions. GPU training is not bit-exact; an AUC within ~0.03 and highly
+   correlated predictions count as a match.
+2. **Probe on cache v2:** our step-4 sweep again. The first probe used the old clipped cache; v2 has a
+   tumour-based clip ceiling and a fixed mm scale.
+3. **Our ViT-only model on cache v2:** the probe's top setting, 3 seeds, ensemble, then paired DeLong and
+   bootstrap tests against B3.
+
+""" + ATTACH),
+    params('''STEP = "step6"
+CACHE_VERSION = 2          # Akula's mnj-cache-v2
+RUN_B3 = True              # 1. reproduce Akula's B3 (~0.5 h)
+RUN_PROBE = True           # 2. probe on cache v2 (~0.5 h)
+PROBE_BACKBONES = ["mae", "dinov2_b"]
+PROBE_NORMS = ["joint_pct", "per_phase", "joint_tumor", "pre_ref", "zscore", "sub", "kinetic", "early3"]
+PROBE_CROPS = ["fixed", "tumor"]
+RUN_VITONLY = True         # 3. fine-tune the probe's top setting (~0.5 h per seed)
+VITONLY_SEEDS = [0, 1, 2]
+VITONLY_EXTRA = []         # extra overrides, e.g. ["model.train_blocks=2"]
+TIME_BUDGET_H = 11.0
+DEBUG = False              # True: 2 epochs on 48 patients per run (a few minutes) to check the notebook
+PUSH_RESULTS = False
+NOTEBOOK_NAME = "step6"
+'''),
+    code(SETUP),
+    code(HELPERS),
+    code('''caches = check_caches(CACHE_VERSION)'''),
+    md("## 1. B3 reproduction (Akula's procedure)"),
+    code(r'''preds = {"B3, old cache v1 (repo)": B3_V1, "B3, cache v2 (Akula, repo)": AKULA_B3_V2}
+if RUN_B3:
+    d, m = train("b3_vit", 0, [], label="step6_b3_repro")
+    note_runs("b3_repro", [d])
+    preds["B3, cache v2 (reproduced)"] = ev.load_preds(f"{d}/val_preds.csv")
+    a, b = ev.align({"a": AKULA_B3_V2, "b": preds["B3, cache v2 (reproduced)"]}).values()
+    print(f"\nAkula val AUC {stats.auc(a.label, a.prob):.3f} | reproduced {stats.auc(b.label, b.prob):.3f} | "
+          f"correlation of the two runs' predictions r = {np.corrcoef(a.prob, b.prob)[0, 1]:.2f} | "
+          f"train AUC (overfitting) {train_auc(d):.3f} (Akula: 0.873)")
+display(compare(preds, "B3, cache v2 (Akula, repo)").round(3))
+'''),
+    md("## 2. Probe on cache v2 (frozen backbones, CV AUC on train)"),
+    code(r'''if RUN_PROBE:
+    pdir = "/kaggle/working/probe_v2"
+    cmd = [sys.executable, "-m", "src.vitonly.probe", "--backbones", *PROBE_BACKBONES, "--norms", *PROBE_NORMS,
+           "--crops", *PROBE_CROPS, "--prefer", "uint8", "--out", pdir, "--cache-root", "/kaggle/input", "/kaggle/working"]
+    if DEBUG: cmd += ["--limit", "40"]
+    print(" ".join(cmd)); subprocess.run(cmd, check=True)
+    probe = pd.read_csv(f"{pdir}/probe_results.csv")
+    os.makedirs(f"{OUT}/step6_probe", exist_ok=True); probe.to_csv(f"{OUT}/step6_probe/probe_results.csv", index=False)
+    display(probe.head(15).round(3))
+    top = probe[probe.backbone != "-"].iloc[0]
+    TOP = dict(backbone=top.backbone, norm=top.norm, crop=top.crop, pool=top["pool"])
+else:
+    TOP = dict(backbone="dinov2_b", norm="sub", crop="tumor", pool="gap")     # step-4 winner on the old cache
+print("TOP setting for fine-tuning:", TOP)
+'''),
+    md("## 3. Our ViT-only model on cache v2 (3 seeds + ensemble) vs B3"),
+    code(r'''if RUN_VITONLY:
+    cfg = "vo_dinov2" if TOP["backbone"].startswith("dinov2") else "vo_base"
+    sets = [f"data.norm={TOP['norm']}", f"data.crop={TOP['crop']}", f"model.backbone={TOP['backbone']}",
+            f"model.pool={TOP['pool']}", "data.prefer_cache=uint8", *VITONLY_EXTRA]
+    dirs = []
+    for s in VITONLY_SEEDS:
+        if budget_left() < 0.7:
+            print(f"seed {s} skipped: time budget"); continue
+        dirs.append(finetune(cfg, s, sets, f"step6_vitonly_s{s}"))
+    note_runs("vitonly", dirs)
+    preds["ViT-only vaib, cache v2 (ensemble)"] = save_preds("step6_vitonly_ensemble", preds_of(dirs))
+    for d in dirs:
+        print(os.path.basename(d), "val AUC", round(json.load(open(f"{d}/metrics.json"))["val"]["auc"], 3))
+tab = compare(preds, "B3, cache v2 (Akula, repo)")
+tab.to_csv(f"{OUT}/step6_summary.csv", index=False)
+display(tab.round(3))
+print("diff_vs_ref > 0 with delong_p < 0.05 = significantly better than Akula's B3 on the same 177 patients")
+'''),
+    code(PUSH),
+]
+
+NB07 = [
+    md("""# Step 7: regularisation sweep for the ViT (point 1) + ViT-clinical fusion on cache v2 (point 2) (GPU, ~5-6 h)
+**Point 1, regularisation.** B3 on cache v2 overfits (train AUC 0.87 vs val 0.56). Each run below changes
+**one** thing against `base`, which is Akula's sweep list from `kaggle/11_sweep.ipynb`: frozen ViT (linear
+probe), 2 trainable blocks, skipping near-empty slices, stronger augmentation, dropout 0.5 + weight decay, and
+the supervised ImageNet backbone. The table shows val AUC, **train AUC (the overfitting gap)**, and the paired
+DeLong / bootstrap difference vs `base`.
+
+**Point 2, fusion.** F2 (`f2_attn`: ViT slice tokens + clinical tokens through attention) on cache v2, 3 seeds
++ ensemble. AUC overall, per cohort and **within subtypes** (HR+/HER2-, HER2+, triple-negative), compared
+with B1 (clinical + tumour size) and B3 by paired DeLong. `FUSION_USE_BEST_SWEEP = True` also applies the
+best sweep setting to F2. That choice is made on val, so mark it as such in the report.
+
+""" + ATTACH),
+    params('''STEP = "step7"
+CACHE_VERSION = 2
+RUN_SWEEP = True
+SWEEP_SEEDS = [0]                 # [0, 1, 2] to confirm a winner (3x the time)
+RUNS = {                          # name: overrides of b3_vit; the FIRST entry is the baseline (Akula's list)
+    "base":         ["optim.patience=15"],
+    "frozen":       ["optim.patience=15", "model.train_blocks=0"],
+    "blocks_2":     ["optim.patience=15", "model.train_blocks=2"],
+    "min_area_0.1": ["optim.patience=15", "data.min_area_frac=0.1"],
+    "strong_aug":   ["optim.patience=15", "aug.rotate_deg=30", "aug.intensity=0.2", "aug.scale=[0.8, 1.2]"],
+    "dropout_0.5":  ["optim.patience=15", "model.dropout=0.5", "optim.weight_decay=0.1"],
+    "supervised":   ["optim.patience=15", "model.backbone=google/vit-base-patch16-224"],
+}
+RUN_FUSION = True
+FUSION_CONFIG = "f2_attn"         # F2 (main model); "f1_concat" = concatenation baseline
+FUSION_SEEDS = [0, 1, 2]
+FUSION_EXTRA = []                 # overrides for F2, e.g. ["data.min_area_frac=0.1"]
+FUSION_USE_BEST_SWEEP = False     # True: add the best sweep entry's overrides to F2 (chosen on val)
+TIME_BUDGET_H = 11.0
+DEBUG = False
+PUSH_RESULTS = False
+NOTEBOOK_NAME = "step7"
+'''),
+    code(SETUP),
+    code(HELPERS),
+    code('''caches = check_caches(CACHE_VERSION)'''),
+    md("## Point 1: regularisation sweep (B3 on cache v2)"),
+    code(r'''sweep = {}
+if RUN_SWEEP:
+    for name, sets in RUNS.items():
+        for s in SWEEP_SEEDS:
+            if budget_left() < 0.8:
+                print(f"{name} seed {s} skipped: time budget"); continue
+            d, m = train("b3_vit", s, sets, label=f"step7_sweep_{name}_s{s}")
+            sweep.setdefault(name, []).append(d)
+            print(f"{name} s{s}: val AUC {m['val']['auc']:.3f}, train AUC {train_auc(d):.3f}, best epoch {m['best_epoch']}")
+    note_runs("sweep", [d for ds in sweep.values() for d in ds])
+    sp = {n: preds_of(ds) for n, ds in sweep.items()}
+    tab = compare(sp, "base")
+    tab.insert(1, "overrides", [" ".join(RUNS[n]) for n in tab.model])
+    tab.insert(2, "train_auc", [np.nanmean([train_auc(d) for d in sweep[n]]) for n in tab.model])
+    tab.insert(3, "gap", tab.train_auc - tab.auc)
+    tab.to_csv(f"{OUT}/step7_sweep_summary.csv", index=False)
+    display(tab.round(3))
+    best = tab.sort_values("auc", ascending=False).model.iloc[0]
+    note_runs("sweep_best", sweep[best])
+    save_preds("step7_sweep_best", sp[best])
+    print(f"best on val: {best} (overrides {RUNS[best]}). Trust it only if delong_p < 0.05 vs base; "
+          "confirm with SWEEP_SEEDS = [0, 1, 2].")
+'''),
+    md("## Point 2: ViT + clinical fusion (F2) on cache v2, overall / per cohort / within subtypes"),
+    code(r'''if RUN_FUSION:
+    extra = list(FUSION_EXTRA)
+    if FUSION_USE_BEST_SWEEP and sweep:
+        extra += [s for s in RUNS[best] if s not in extra]
+    dirs = []
+    for s in FUSION_SEEDS:
+        if budget_left() < 0.8:
+            print(f"fusion seed {s} skipped: time budget"); continue
+        d, m = train(FUSION_CONFIG, s, extra, label=f"step7_fusion_s{s}")
+        dirs.append(d)
+        print(f"{FUSION_CONFIG} s{s}: val AUC {m['val']['auc']:.3f}")
+    note_runs("fusion", dirs)
+    f2 = save_preds("step7_fusion_ensemble", preds_of(dirs))
+    b3 = preds_of(sweep["base"]) if sweep.get("base") else AKULA_B3_V2
+    models = {"B1 clinical + size (LR)": B1_VAL, "B0 clinical (LR)": B0_VAL, "B3 ViT image-only, v2": b3,
+              "F2 fusion, old cache v1": F2_V1, f"F2 fusion, cache v2 ({len(dirs)} seeds)": f2}
+    tab = compare(models, "B1 clinical + size (LR)")
+    tab.to_csv(f"{OUT}/step7_fusion_summary.csv", index=False)
+    display(tab.round(3))
+    print("\nAUC within subtypes [95% CI] n=patients/pCR+:")
+    st = subtype_wide(models); st.to_csv(f"{OUT}/step7_fusion_by_subtype.csv"); display(st)
+    print("\nAUC per cohort:")
+    sc = subtype_wide(models, "cohort"); sc.to_csv(f"{OUT}/step7_fusion_by_cohort.csv"); display(sc)
+'''),
+    code(PUSH),
+]
+
+NB08 = [
+    md("""# Step 8: statistics (point 3), leave-one-cohort-out (point 4), final test (point 4, OFF by default)
+**Point 3, statistics** on the validation predictions of every model: AUC with DeLong 95% CI, AUPRC, Brier,
+ECE, sensitivity / PPV / NPV at 90% specificity, the paired DeLong test vs the clinical baseline B1,
+calibration (reliability) plots, and AUC within subtypes and cohorts. It reads the repo's committed results plus
+any attached step-6 / step-7 notebook outputs (CPU part, minutes).
+
+**Point 4a, leave-one-cohort-out (LOCO):** for each cohort, train on the other two (early stopping on their
+val), then score the held-out cohort's train + val patients, which the model never saw. The clinical B1 is run
+the same way for comparison (GPU, ~0.5 h per model per cohort).
+
+**Point 4b, the final test evaluation:** **once**, on the frozen final models, with thresholds taken from val.
+`FINAL_TEST = False` by default. Agree with the team before running it (plan D-006: the test set is used once;
+every use is logged in `final_eval_log.csv`). It needs the step-6/7 outputs attached (their checkpoints).
+
+Kaggle setup: GPU T4 x2 (for LOCO), Internet ON. **+ Add Input**: `mnj-cache-v2`, the code (`mnj-code-vaib`
+new version or the `GITHUB_TOKEN` secret), and the **outputs of your step-6 and step-7 notebooks**
+(+ Add Input -> Your Work -> Notebooks)."""),
+    params('''STEP = "step8"
+CACHE_VERSION = 2
+RUN_STATS = True
+REFERENCE = "B1 clinical + size (LR)"
+MODELS = {   # name: run-folder name pattern (glob) under results/ of the repo or the attached outputs; seeds averaged
+    "B1 clinical + size (LR)":            "b1_lr_s0_*",
+    "B0 clinical (LR)":                   "b0_lr_s0_*",
+    "B3 ViT, old cache v1":               "b3_vit_s0_1009-1616_*",
+    "B3 ViT, cache v2 (Akula)":           "b3_vit_s0_1019-0302_*",
+    "B3 ViT, cache v2, best regularised": "step7_sweep_best",
+    "ViT-only vaib, old cache (ens.)":    "vo_mae_kinetic_tumor_ensemble",
+    "ViT-only vaib, cache v2 (ens.)":     "step6_vitonly_ensemble",
+    "F2 fusion, old cache v1":            "f2_attn_s0_1009-1605_*",
+    "F2 fusion, cache v2 (ens.)":         "step7_fusion_ensemble",
+}
+RUN_LOCO = True
+LOCO_CONFIGS = ["f2_attn", "b3_vit"]     # models retrained per held-out cohort
+LOCO_SEED = 0
+LOCO_EXTRA = []                          # e.g. the best sweep overrides from step 7
+FINAL_TEST = False                       # True ONCE, with the team's agreement
+FINAL_CONFIRM = ""                       # must be "I use the test set once" when FINAL_TEST = True
+FINAL_MODELS = {   # name: "step:key" of runs.json written by step 6 / 7 (checkpoints from the attached outputs)
+    "F2 fusion, cache v2": "step7:fusion",
+    "B3 ViT, cache v2, best regularised": "step7:sweep_best",
+    "ViT-only vaib, cache v2": "step6:vitonly",
+}
+TIME_BUDGET_H = 11.0
+DEBUG = False
+PUSH_RESULTS = False
+NOTEBOOK_NAME = "step8"
+'''),
+    code(SETUP),
+    code(HELPERS),
+    md("## Point 3: statistics on validation"),
+    code(r'''ROOTS = ["results", "/kaggle/input"]
+def collect(pattern):
+    seen, hits = set(), []
+    for r in ROOTS:
+        for h in sorted(glob.glob(f"{r}/**/{pattern}/val_preds.csv", recursive=True)):
+            name = os.path.basename(os.path.dirname(h))
+            if name not in seen:            # the same run can sit in the repo and in an attached output
+                seen.add(name); hits.append(h)
+    return hits
+
+if RUN_STATS:
+    preds = {}
+    for name, pat in MODELS.items():
+        hits = collect(pat)
+        if not hits:
+            print(f"missing (not run / not attached): {name} [{pat}]"); continue
+        preds[name] = preds_of([os.path.dirname(h) for h in hits])
+        print(f"{name}: {len(hits)} run(s)")
+    tab = compare(preds, REFERENCE)
+    tab.to_csv(f"{OUT}/step8_val_statistics.csv", index=False)
+    display(tab.round(3))
+    print("sens/ppv/npv@90spec: threshold chosen on these val patients (optimistic); the final test uses val thresholds.")
+    al = ev.align(preds)
+    fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+    ev.plot_reliability(ax[0], {k: (v.label, v.prob) for k, v in al.items() if "B1" in k or "F2" in k or "B0" in k})
+    ev.plot_reliability(ax[1], {k: (v.label, v.prob) for k, v in al.items() if "ViT" in k or "B3" in k},
+                        "Calibration, image-only models (val)")
+    plt.tight_layout(); plt.savefig(f"{OUT}/step8_calibration.png", dpi=110); plt.show()
+    st = subtype_wide(preds); st.to_csv(f"{OUT}/step8_val_by_subtype.csv"); print("AUC within subtypes:"); display(st)
+    sc = subtype_wide(preds, "cohort"); sc.to_csv(f"{OUT}/step8_val_by_cohort.csv"); print("AUC per cohort:"); display(sc)
+'''),
+    md("## Point 4a: leave-one-cohort-out"),
+    code(r'''if RUN_LOCO:
+    caches = check_caches(CACHE_VERSION)
+    from src.predict_run import score_run
+    rows = []
+    for held in COH:
+        others = [c for c in COH if c != held]
+        tr = patient_table("train", others, cache_dirs=caches)                 # same patients as the image models
+        sc_t = patient_table(["train", "val"], [held], cache_dirs=caches)
+        b1 = ev.clinical_preds(tr, sc_t, "b1_lr")
+        r = ev.delong_ci(b1.label, b1.prob)
+        rows.append({"model": "B1 clinical + size (LR)", "held_out": held, "n": len(b1), "pcr": int(b1.label.sum()),
+                     "auc": r["auc"], "ci_lo": r["ci"][0], "ci_hi": r["ci"][1]})
+        for cfg in LOCO_CONFIGS:
+            if budget_left() < 0.7:
+                print(f"{cfg} / {held} skipped: time budget"); continue
+            d, m = train(cfg, LOCO_SEED, ["export.after_train=false", *LOCO_EXTRA],
+                         label=f"step8_loco_{cfg}_{held}", cohorts=others)
+            p = score_run(d, [held], ["train", "val"])
+            p.to_csv(f"{OUT}/step8_loco_{cfg}_{held}/heldout_preds.csv", index=False)
+            r = ev.delong_ci(p.label, p.prob)
+            rows.append({"model": cfg, "held_out": held, "n": len(p), "pcr": int(p.label.sum()), "auc": r["auc"],
+                         "ci_lo": r["ci"][0], "ci_hi": r["ci"][1], "val_auc_training_cohorts": m["val"]["auc"]})
+            print(f"{cfg} trained on {others} -> {held}: AUC {r['auc']:.3f} ({r['ci'][0]:.2f}-{r['ci'][1]:.2f})")
+    loco = pd.DataFrame(rows)
+    loco.to_csv(f"{OUT}/step8_loco.csv", index=False)
+    display(loco.round(3))
+    display(loco.pivot(index="model", columns="held_out", values="auc").round(3))
+'''),
+    md("## Point 4b: final test evaluation (once)"),
+    code(r'''if FINAL_TEST:
+    assert FINAL_CONFIRM == "I use the test set once", 'set FINAL_CONFIRM = "I use the test set once"'
+    from src.predict_run import score_run
+    rj = {}
+    for f in glob.glob("/kaggle/input/**/runs.json", recursive=True) + glob.glob("/kaggle/working/results/**/runs.json", recursive=True):
+        step = os.path.basename(os.path.dirname(f))
+        rj.setdefault(step, {}).update(json.load(open(f)))
+    all_runs = {d.name: d for d in ev.find_run_dirs(["/kaggle/input", "/kaggle/working"])}
+    train_t, val_t = patient_table("train", COH), patient_table("val", COH)
+    test_t = patient_table("test", COH, allow_test=True)
+    final, log = {}, []
+    b1_val = ev.clinical_preds(train_t, val_t, "b1_lr")
+    final["B1 clinical + size (LR)"] = (ev.clinical_preds(train_t, test_t, "b1_lr"),
+                                        ev.threshold_at_spec(b1_val.label, b1_val.prob))
+    for name, key in FINAL_MODELS.items():
+        step, k = key.split(":")
+        ids = rj.get(step, {}).get(k, [])
+        dirs = [all_runs[i] for i in ids if i in all_runs]
+        if not dirs:
+            print(f"SKIPPED {name}: no checkpoints for {key} (attach the {step} notebook output)"); continue
+        tests = [score_run(d, COH, ["test"], final=True) for d in dirs]
+        log += [{"time": time.strftime("%Y-%m-%d %H:%M:%S"), "model": name, "run": d.name, "n": len(t)} for d, t in zip(dirs, tests)]
+        vals = preds_of(dirs)
+        final[name] = (ev.ensemble(tests) if len(tests) > 1 else tests[0], ev.threshold_at_spec(vals.label, vals.prob))
+    fdir = f"/kaggle/working/results/{PERSON}/final_test"; os.makedirs(fdir, exist_ok=True)
+    pd.DataFrame(log).to_csv(f"{fdir}/final_eval_log.csv", mode="a", index=False,
+                             header=not os.path.exists(f"{fdir}/final_eval_log.csv"))
+    aligned = ev.align({k: v[0] for k, v in final.items()})       # the test patients every model scored
+    ref = aligned["B1 clinical + size (LR)"]
+    rows = []
+    for name, (_, t) in final.items():
+        p = aligned[name]
+        r = {"model": name, **ev.summary_row(p.label, p.prob, t=t)}
+        if name != "B1 clinical + size (LR)":
+            dl = ev.delong(ref.label, ref.prob, p.prob)
+            r.update(diff_vs_B1=dl["diff"], delong_ci_lo=dl["ci"][0], delong_ci_hi=dl["ci"][1], delong_p=dl["p"])
+        rows.append(r)
+        p.to_csv(f"{fdir}/{name.replace(' ', '_').replace(',', '')}_test_preds.csv", index=False)
+    ft = pd.DataFrame(rows); ft.to_csv(f"{fdir}/final_test_statistics.csv", index=False)
+    print(f"TEST SET: {len(ref)} patients, {int(ref.label.sum())} pCR. Thresholds from val (90% spec)."); display(ft.round(3))
+    fp = aligned
+    st = subtype_wide(fp); st.to_csv(f"{fdir}/final_test_by_subtype.csv"); display(st)
+    sc = subtype_wide(fp, "cohort"); sc.to_csv(f"{fdir}/final_test_by_cohort.csv"); display(sc)
+    fig, ax = plt.subplots(figsize=(6.5, 5)); ev.plot_reliability(ax, {k: (v.label, v.prob) for k, v in fp.items()}, "Calibration (test)")
+    plt.tight_layout(); plt.savefig(f"{fdir}/final_test_calibration.png", dpi=110); plt.show()
+else:
+    print("final test not run (FINAL_TEST = False)")
+'''),
+    code(PUSH),
+]
+
+
 def step1_for(cohort, letter, size):
     """step1 with COHORT fixed: one notebook per cohort, so each keeps its own output (Kaggle makes a Dataset
     from a notebook's latest version only; re-running one notebook with another COHORT would replace it)."""
@@ -594,7 +1062,9 @@ NOTEBOOKS = {"step0_demo_download_check.ipynb": NB00,
              "step1b_download_ispy2.ipynb": step1_for("ispy2", "b", "13.6 GB"),
              "step1c_download_duke.ipynb": step1_for("duke", "c", "8.6 GB"),
              "step2_build_cache_v2.ipynb": NB02, "step3_input_diagnostics.ipynb": NB01,
-             "step4_probe_sweep.ipynb": NB03, "step5_finetune_vit.ipynb": NB04}
+             "step4_probe_sweep.ipynb": NB03, "step5_finetune_vit.ipynb": NB04,
+             "step6_reproduce_akula_cache_v2.ipynb": NB06, "step7_regularisation_and_fusion.ipynb": NB07,
+             "step8_statistics_loco_final_test.ipynb": NB08}
 
 
 def main():

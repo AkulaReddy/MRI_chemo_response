@@ -93,6 +93,7 @@ def find_caches(roots, prefer="v2"):
     (builder 2 = main's resampled, less-clipped cache)."""
     import glob
     import os
+    prefer = {"raw": "v2", "uint8": "v1"}.get(prefer, prefer)   # plain names: raw = mnj-cache2, uint8 = mnj-cache(-v2)
     found = {}
     for r in roots:
         for depth in range(6):

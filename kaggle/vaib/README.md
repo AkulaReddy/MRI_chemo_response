@@ -66,6 +66,17 @@ Attaching a better one alongside an older one is safe: the better one wins (prin
 `LIMIT = 0` / `DEBUG = False` every patient in the train and val splits is used. The test split is never
 used, by design.
 
+## Steps 6-8: project update 2 (on Akula's cache `mnj-cache-v2`)
+| step | notebook | what it does | attach | GPU time |
+|---|---|---|---|---|
+| 6 | `step6_reproduce_akula_cache_v2.ipynb` | reproduces Akula's B3 on cache v2 (0.559) with his exact procedure; probe on cache v2; our ViT-only model with the probe's top setting (3 seeds) vs B3, with paired DeLong / bootstrap | `mnj-cache-v2` + code | ~3 h |
+| 7 | `step7_regularisation_and_fusion.ipynb` | **point 1:** regularisation sweep (frozen ViT, 2 blocks, skip near-empty slices, strong augmentation, dropout 0.5 + weight decay, supervised backbone) with train AUC / overfitting gap; **point 2:** F2 ViT + clinical fusion on cache v2 (3 seeds), AUC overall / per cohort / **within subtypes**, DeLong vs B1 | `mnj-cache-v2` + code | ~5-6 h |
+| 8 | `step8_statistics_loco_final_test.ipynb` | **point 3:** DeLong CIs and tests vs B1, sensitivity / PPV / NPV at 90% specificity, calibration plots, subtype / cohort AUCs for all models; **point 4:** leave-one-cohort-out (F2, B3, B1); the final test evaluation (`FINAL_TEST = False` until the team agrees: test once, logged) | `mnj-cache-v2` + code + **outputs of your step 6 and step 7 notebooks** | ~1.5 h |
+
+Each writes `results/<PERSON>/step6|7|8/` (summary CSVs, prediction files, `runs.json`) to its Output. Step 8 finds
+the step 6/7 predictions and checkpoints in the attached notebook outputs (+ Add Input -> Your Work -> Notebooks).
+Run each with `DEBUG = True` first (minutes), then `DEBUG = False` + Save & Run All (Commit).
+
 ## Option: download on your laptop instead of step 1
 `python scripts/download_breastdcedl.py` downloads the full release into `datasets/BreastDCEDL/`. It resumes
 and checks md5, and that folder is ignored by git. Then upload it as one Dataset with the Kaggle CLI (see

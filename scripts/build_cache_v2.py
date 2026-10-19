@@ -209,7 +209,10 @@ def main():
     index.insert(1, "cohort", a.cohort)
     index.to_csv(a.out / "cache_index.csv", index=False)
     ok = index[index.status == "ok"]
-    info = {"cohort": a.cohort, "format": "v2", "builder_version": BUILDER_VERSION, "git": bc.git_commit(),
+    # builder_version 0: src/train.py picks the highest builder_version among uint8 caches and must never pick
+    # this raw cache (it has no `rgb`); src/vitonly finds it by "format": "v2" instead
+    info = {"cohort": a.cohort, "format": "v2", "builder_version": 0, "raw_builder_version": BUILDER_VERSION,
+            "git": bc.git_commit(),
             "raw": str(a.raw), "plane": PLANE, "margin": bc.MARGIN, "labeled_only": not a.all_patients,
             "status_counts": index.status.value_counts().to_dict(),
             "z_source": ok.get("z_source", pd.Series(dtype=str)).value_counts().to_dict(),

@@ -81,7 +81,9 @@ def main(argv=None):
     ap.add_argument("--fov-mm", type=float, default=100.0)
     ap.add_argument("--cohorts", nargs="*", default=["ispy1", "ispy2", "duke"])
     ap.add_argument("--cache-root", nargs="*", default=None)
-    ap.add_argument("--prefer", default="v2", choices=["v1", "v2"], help="cache format when both are attached")
+    ap.add_argument("--prefer", default="v2", choices=["v1", "v2", "raw", "uint8"],
+                    help="cache format when several are attached: raw (= v2, mnj-cache2-*) or uint8 (= v1: "
+                         "mnj-cache-v2 / mnj-cache-*, highest builder wins)")
     ap.add_argument("--out", default="runs/probe")
     ap.add_argument("--batch", type=int, default=192, help="images per forward pass")
     ap.add_argument("--workers", type=int, default=4, help="data-loading processes")
