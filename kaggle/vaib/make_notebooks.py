@@ -795,7 +795,8 @@ best sweep setting to F2. That choice is made on val, so mark it as such in the 
 """ + ATTACH),
     params('''STEP = "step7"
 CACHE_VERSION = 2
-RUN_SWEEP = True
+RUN_SWEEP = False                 # Akula already ran this sweep (results/A/sweep_b3_vit_1019-0406: best blocks_2
+                                  # 0.579 vs base 0.559, nothing significant). True = rerun it here (~3.5 h)
 SWEEP_SEEDS = [0]                 # [0, 1, 2] to confirm a winner (3x the time)
 RUNS = {                          # name: overrides of b3_vit; the FIRST entry is the baseline (Akula's list)
     "base":         ["optim.patience=15"],
@@ -809,7 +810,7 @@ RUNS = {                          # name: overrides of b3_vit; the FIRST entry i
 RUN_FUSION = True
 FUSION_CONFIG = "f2_attn"         # F2 (main model); "f1_concat" = concatenation baseline
 FUSION_SEEDS = [0, 1, 2]
-FUSION_EXTRA = []                 # overrides for F2, e.g. ["data.min_area_frac=0.1"]
+FUSION_EXTRA = []                 # overrides for F2, e.g. ["model.train_blocks=2"] (Akula's best sweep setting)
 FUSION_USE_BEST_SWEEP = False     # True: add the best sweep entry's overrides to F2 (chosen on val)
 TIME_BUDGET_H = 11.0
 DEBUG = False
@@ -898,7 +899,8 @@ MODELS = {   # name: run-folder name pattern (glob) under results/ of the repo o
     "B0 clinical (LR)":                   "b0_lr_s0_*",
     "B3 ViT, old cache v1":               "b3_vit_s0_1009-1616_*",
     "B3 ViT, cache v2 (Akula)":           "b3_vit_s0_1019-0302_*",
-    "B3 ViT, cache v2, best regularised": "step7_sweep_best",
+    "B3 ViT, cache v2, 2 blocks (Akula sweep)": "b3_vit_s0_1019-0500_*",
+    "B3 ViT, cache v2, best regularised (step 7)": "step7_sweep_best",
     "ViT-only vaib, old cache (ens.)":    "vo_mae_kinetic_tumor_ensemble",
     "ViT-only vaib, cache v2 (ens.)":     "step6_vitonly_ensemble",
     "F2 fusion, old cache v1":            "f2_attn_s0_1009-1605_*",
