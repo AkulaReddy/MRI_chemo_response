@@ -1,0 +1,8 @@
+name,seed,overrides,status,run_id,minutes,val_auc,ci_lo,ci_hi,auprc,ece,best_epoch,epochs_run,max_val_auc_any_epoch,auc_duke,auc_ispy1,auc_ispy2,vs_base,vs_base_ci,vs_base_p
+base,0,optim.patience=15,ok,b3_vit_s0_1019-0406_4662d29,29.6,0.559,0.464,0.65,0.365,0.174,18,30,0.559,0.511,0.583,0.568,,,
+frozen,0,optim.patience=15 model.train_blocks=0,ok,b3_vit_s0_1019-0436_4662d29,24.0,0.5148,0.419,0.611,0.322,0.021,17,30,0.5148,0.501,0.512,0.514,-0.044,-0.126 to +0.044,0.301
+blocks_2,0,optim.patience=15 model.train_blocks=2,ok,b3_vit_s0_1019-0500_4662d29,25.1,0.5791,0.483,0.67,0.375,0.121,26,30,0.5791,0.546,0.599,0.584,0.02,-0.020 to +0.059,0.313
+min_area_0.1,0,optim.patience=15 data.min_area_frac=0.1,ok,b3_vit_s0_1019-0525_4662d29,29.0,0.5679,0.474,0.659,0.357,0.185,19,30,0.5679,0.491,0.585,0.589,0.009,-0.022 to +0.037,0.561
+strong_aug,0,"optim.patience=15 aug.rotate_deg=30 aug.intensity=0.2 aug.scale=[0.8, 1.2]",ok,b3_vit_s0_1019-0554_4662d29,29.6,0.5553,0.456,0.65,0.356,0.142,18,30,0.5553,0.494,0.616,0.568,-0.004,-0.035 to +0.028,0.795
+dropout_0.5,0,optim.patience=15 model.dropout=0.5 optim.weight_decay=0.1,ok,b3_vit_s0_1019-0623_4662d29,29.6,0.5582,0.462,0.65,0.363,0.165,18,30,0.5582,0.526,0.591,0.563,-0.001,-0.012 to +0.010,0.905
+supervised,0,optim.patience=15 model.backbone=google/vit-base-patch16-224,ok,b3_vit_s0_1019-0653_4662d29,22.8,0.5376,0.443,0.631,0.341,0.156,7,23,0.5376,0.58,0.632,0.489,-0.021,-0.108 to +0.066,0.637
