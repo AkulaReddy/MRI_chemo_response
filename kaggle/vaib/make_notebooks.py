@@ -28,8 +28,9 @@ _tok = None
 try:
     from kaggle_secrets import UserSecretsClient
     _tok = UserSecretsClient().get_secret("GITHUB_TOKEN")
-except Exception:
-    pass
+except Exception as e:
+    print("no GITHUB_TOKEN secret attached to this notebook (fine if the mnj-code-vaib Dataset is attached):",
+          type(e).__name__)
 
 def git(*args, cwd="/tmp/repo"):
     """git with the token as a one-off header (never stored in .git/config or the output)."""
@@ -47,10 +48,24 @@ if _tok:                                    # 1) clone the branch from GitHub
     git("clone", "--quiet", "--depth", "1", "--branch", GIT_TAG, f"https://github.com/{REPO}.git", "/tmp/repo", cwd="/tmp")
     print("code: GitHub", REPO, GIT_TAG, git("log", "-1", "--format=%h %s"))
 else:                                       # 2) or a code Dataset (zip of the repo) attached as input
-    import glob
-    hits = [h for d in range(1, 6) for h in glob.glob("/kaggle/input/" + "*/" * d + "src/vitonly/__init__.py")]
-    assert hits, ("no GITHUB_TOKEN secret and no code Dataset attached. Either add the secret (Add-ons -> Secrets) "
-                  "or attach the Dataset made from mnj-code-vaib.zip (see kaggle/vaib/README.md)")
+    import glob, zipfile
+    hits = [h for d in range(1, 8) for h in glob.glob("/kaggle/input/" + "*/" * d + "src/vitonly/__init__.py")]
+    zips = [z for d in range(1, 6) for z in glob.glob("/kaggle/input/" + "*/" * d + "mnj-code-vaib*.zip")]
+    if not hits and zips:                   # Kaggle kept the uploaded zip as a file: unpack it
+        zipfile.ZipFile(zips[0]).extractall("/tmp/code_zip")
+        hits = glob.glob("/tmp/code_zip/**/src/vitonly/__init__.py", recursive=True)
+    if not hits:
+        print("attached inputs:")
+        for root, dirs, files in os.walk("/kaggle/input"):
+            if root.count("/") <= 5:
+                print("  ", root, dirs[:6], files[:4])
+            else:
+                dirs[:] = []
+        raise SystemExit(
+            "\nThe notebook can't find the project code. Do ONE of these, then Run All again:\n"
+            "  (a) Add-ons -> Secrets -> add GITHUB_TOKEN (a GitHub token with access to the repo) and switch it ON\n"
+            "      for this notebook, or\n"
+            "  (b) + Add Input -> Datasets -> Your Datasets -> mnj-code-vaib (made by uploading mnj-code-vaib.zip).")
     code_root = os.path.dirname(os.path.dirname(os.path.dirname(hits[0])))
     shutil.copytree(code_root, "/tmp/repo")
     print("code: attached Dataset", code_root)
