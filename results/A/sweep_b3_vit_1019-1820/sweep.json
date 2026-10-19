@@ -1,0 +1,42 @@
+{
+  "config": "b3_vit",
+  "seeds": [
+    0
+  ],
+  "runs": {
+    "ispy": [
+      "optim.patience=15",
+      "model.backbone=facebook/dinov2-base",
+      "model.train_blocks=2",
+      "model.input_phases=early",
+      "data.cohorts=[ispy1, ispy2]"
+    ],
+    "ispy_dropout_0.5": [
+      "optim.patience=15",
+      "model.backbone=facebook/dinov2-base",
+      "model.train_blocks=2",
+      "model.input_phases=early",
+      "data.cohorts=[ispy1, ispy2]",
+      "model.dropout=0.5"
+    ],
+    "ispy_droppath_0.2": [
+      "optim.patience=15",
+      "model.backbone=facebook/dinov2-base",
+      "model.train_blocks=2",
+      "model.input_phases=early",
+      "data.cohorts=[ispy1, ispy2]",
+      "model.drop_path=0.2"
+    ],
+    "ispy_both": [
+      "optim.patience=15",
+      "model.backbone=facebook/dinov2-base",
+      "model.train_blocks=2",
+      "model.input_phases=early",
+      "data.cohorts=[ispy1, ispy2]",
+      "model.dropout=0.5",
+      "model.drop_path=0.2"
+    ]
+  },
+  "git_tag": "d1.9",
+  "debug": false
+}
