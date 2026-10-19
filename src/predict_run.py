@@ -29,10 +29,12 @@ from src.train import find_caches, git_sha, make_loader, predict, sigmoid  # noq
 def load_run(run_dir: Path, dev):
     cfg = yaml.safe_load((run_dir / "config_resolved.yaml").read_text())
     vitonly = "pool" in cfg["model"] or cfg.get("name", "").startswith("vo_")
-    if vitonly:
-        from src.vitonly.model import VitOnly
-        model = VitOnly(cfg["model"])
-        enc = None
+    if vitonly:   # our pipeline: image-only VitOnly, or VitFusion (model.kind attn) with its clinical encoder
+        from src.data.clinical import ClinicalEncoder
+        from src.vitonly.model import build
+        enc = ClinicalEncoder.from_dict(json.loads((run_dir / "encoder.json").read_text())) \
+            if (run_dir / "encoder.json").exists() else None
+        model = build(cfg["model"], enc)
     else:
         from src.data.clinical import ClinicalEncoder
         from src.models.fusion import build_model
@@ -48,7 +50,7 @@ def dataset(cfg, enc, vitonly, table, caches):
         from src.vitonly.data import SlabBags
         return SlabBags(table, caches, norm=d["norm"], crop=d["crop"], k=d.get("k_eval", 12), train=False,
                         slice_mode=d.get("slice_mode", "mid"), mid_frac=d.get("mid_frac", 0.6),
-                        zoom=d.get("zoom", 1.6), fov_mm=d.get("fov_mm", 100.0))
+                        zoom=d.get("zoom", 1.6), fov_mm=d.get("fov_mm", 100.0), encoder=enc)
     from src.data.datasets import PatientBags
     return PatientBags(table, caches, enc, k=d.get("k_eval", 16), train=False, margin=d.get("margin", 0),
                        min_area_frac=float(d.get("min_area_frac", 0.0)))

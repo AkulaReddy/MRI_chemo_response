@@ -597,7 +597,8 @@ def check_caches(version):
 
 def _copy(d, label):
     os.makedirs(f"{OUT}/{label}", exist_ok=True)
-    for f in ("val_preds.csv", "metrics.json", "log.csv", "config_resolved.yaml", "export_preds.csv"):
+    for f in ("val_preds.csv", "metrics.json", "log.csv", "config_resolved.yaml", "export_preds.csv",
+              "train_preds.csv", "encoder.json"):
         if os.path.exists(f"{d}/{f}"):
             shutil.copy(f"{d}/{f}", f"{OUT}/{label}/{f}")
 
@@ -614,10 +615,11 @@ def train(config, seed, sets=(), label=None, cohorts=None):
     if label: _copy(d, label)
     return d, json.load(open(f"{d}/metrics.json"))
 
-def finetune(config, seed, sets=(), label=None):
-    """One src.vitonly.finetune run (this branch's ViT-only model) -> run_dir."""
+def finetune(config, seed, sets=(), label=None, cohorts=None):
+    """One src.vitonly.finetune run (our pipeline: ViT-only vo_base / fusion vo_fusion) -> run_dir."""
     cmd = [sys.executable, "-m", "src.vitonly.finetune", "--config", config, "--seed", str(seed),
            "--cache-root", "/kaggle/input", "/kaggle/working", "--out", "/kaggle/working/runs"]
+    if cohorts: cmd += ["--cohorts", *cohorts]
     if DEBUG: cmd.append("--debug")
     if sets: cmd += ["--set", *sets]
     print("\n" + " ".join(cmd), flush=True)
@@ -650,6 +652,10 @@ def train_auc(d):
     if not os.path.exists(f): return np.nan
     e = pd.read_csv(f); e = e[e.split == "train"]
     return stats.auc(e.label, e.prob)
+
+def vo_train_auc(d):
+    """Training-set AUC of a src.vitonly run (metrics.json): the overfitting gap."""
+    return json.load(open(f"{d}/metrics.json"))["val"].get("train_auc", np.nan)
 
 def compare(preds, ref):
     """One row per model on the patients all models share: AUC (DeLong CI), AUPRC, Brier, ECE, the 90%-spec
@@ -1005,7 +1011,8 @@ if RUN_STATS:
         ids = rj.get(step, {}).get(k, [])
         dirs = [all_runs[i] for i in ids if i in all_runs]
         if not dirs:
-            print(f"SKIPPED {name}: no checkpoints for {key} (attach the {step} notebook output)"); continue
+            print(f"SKIPPED {name}: no checkpoints for {key} (attach the {step} notebook output; "
+                  "a model reused from the repo has predictions but no checkpoint)"); continue
         tests = [score_run(d, COH, ["test"], final=True) for d in dirs]
         log += [{"time": time.strftime("%Y-%m-%d %H:%M:%S"), "model": name, "run": d.name, "n": len(t)} for d, t in zip(dirs, tests)]
         vals = preds_of(dirs)
@@ -1036,6 +1043,235 @@ else:
 '''),
     code(PUSH),
 ]
+
+
+LOCO_OURS = r'''if RUN_LOCO:
+    import re
+    caches = check_caches(CACHE_VERSION)
+    from src.predict_run import score_run
+    bs = {}
+    if LOCO_SETS is None:
+        found = sorted(glob.glob("/kaggle/input/**/best_setting.json", recursive=True))
+        bs = json.load(open(found[0])) if found else {}
+        sets = bs.get("overrides", ["model.backbone=dinov2_b", "optim.lr_backbone=1.0e-5", "data.norm=sub",
+                                    "data.crop=tumor", "model.pool=gap"])
+        print("LOCO setting:", bs.get("name", "default: dinov2_b + sub + tumour crop (attach the step-7 output)"), sets)
+    else:
+        sets = list(LOCO_SETS)
+    fsets = bs.get("fusion_overrides", sets)
+    rows = []
+    for held in COH:
+        others = [c for c in COH if c != held]
+        tr = patient_table("train", others, cache_dirs=caches)               # same patients as the image models
+        sc_t = patient_table(["train", "val"], [held], cache_dirs=caches)
+        b1 = ev.clinical_preds(tr, sc_t, "b1_lr")
+        r = ev.delong_ci(b1.label, b1.prob)
+        rows.append({"model": "B1 clinical + size (LR)", "held_out": held, "n": len(b1), "pcr": int(b1.label.sum()),
+                     "auc": r["auc"], "ci_lo": r["ci"][0], "ci_hi": r["ci"][1]})
+        for name, cfg in LOCO_MODELS.items():
+            if budget_left() < 0.9:
+                print(f"{name} / {held} skipped: time budget"); continue
+            label = "step8_loco_" + re.sub(r"[^a-z0-9]+", "_", name.lower()) + f"_{held}"
+            d = finetune(cfg, LOCO_SEED, fsets if cfg == "vo_fusion" else sets, label, cohorts=others)
+            m = json.load(open(f"{d}/metrics.json"))
+            p = score_run(d, [held], ["train", "val"])
+            p.to_csv(f"{OUT}/{label}/heldout_preds.csv", index=False)
+            r = ev.delong_ci(p.label, p.prob)
+            rows.append({"model": name, "held_out": held, "n": len(p), "pcr": int(p.label.sum()), "auc": r["auc"],
+                         "ci_lo": r["ci"][0], "ci_hi": r["ci"][1], "val_auc_training_cohorts": m["val"]["auc"]})
+            print(f"{name} trained on {others} -> {held}: AUC {r['auc']:.3f} ({r['ci'][0]:.2f}-{r['ci'][1]:.2f})")
+    loco = pd.DataFrame(rows)
+    loco.to_csv(f"{OUT}/step8_loco.csv", index=False)
+    display(loco.round(3))
+    display(loco.pivot(index="model", columns="held_out", values="auc").round(3))
+'''
+
+ATTACH_OURS = """Kaggle setup: Accelerator **GPU T4 x2** (one GPU is used), Internet **ON**. **+ Add Input**:
+- the caches: `mnj-cache-ispy1`, `mnj-cache-ispy2`, `mnj-cache-duke`. Our pipeline normalises the images
+  itself (`data.norm`), so any attached cache works; `mnj-cache2-*` (raw) or `mnj-cache-v2` are used
+  automatically if attached;
+- the code: the `mnj-code-vaib` Dataset (upload the new zip as a **new version** first) or the `GITHUB_TOKEN` secret.
+
+Use **Save Version -> Save & Run All (Commit)**: these runs take hours and continue with the browser closed.
+Results go to the Output tab under `results/<PERSON>/<step>/`. Keep this notebook's output: step 8 reads it."""
+
+NB07 = [
+    md("""# Step 7: best normalisation, regularisation (point 1), fusion with clinical data (point 2) (GPU, ~6-8 h)
+Everything uses **our pipeline** (`src/vitonly`): our normalisation, tumour crop and backbone. Akula's cache v2
+uses one fixed normalisation; we compare against it later.
+- **A. Best normalisation:** the two strongest ViT-only settings so far, 3 seeds each, ensemble, paired DeLong.
+  The "(step 5)" one is reused from the repo (val 0.574) with `REUSE_STEP5`. The best on val is carried
+  forward (`best_setting.json`); that choice is made on val, so say so in the report.
+- **B. Regularisation (point 1)** of the best setting: frozen ViT (linear probe), 2 trainable blocks,
+  largest-tumour-area slices, stronger augmentation, dropout 0.5 + weight decay. Each run changes one thing
+  vs `base`, and train AUC is reported to show the overfitting gap.
+- **C. Fusion (point 2):** the best setting + clinical tokens (HR, HER2, race, menopause, age, tumour-box
+  volume) through attention (the F2 design, `configs/vo_fusion.yaml`), 3 seeds. AUC overall, per cohort and
+  **within subtypes**, paired DeLong vs B1 (clinical + size).
+
+""" + ATTACH_OURS),
+    params('''STEP = "step7"
+CACHE_VERSION = None              # our pipeline: no cache-version requirement
+CANDIDATES = {                    # ViT-only settings (overrides of configs/vo_base.yaml)
+    "dinov2_b + sub + tumour crop (probe #1)": ["model.backbone=dinov2_b", "optim.lr_backbone=1.0e-5",
+                                               "data.norm=sub", "data.crop=tumor", "model.pool=gap"],
+    "mae + kinetic + tumour crop (step 5)":    ["model.backbone=mae", "data.norm=kinetic", "data.crop=tumor",
+                                               "model.pool=gap"],
+}
+CAND_SEEDS = [0, 1, 2]
+REUSE_STEP5 = True                # the "(step 5)" candidate: use its 3 seeds from results/B instead of retraining
+RUN_SWEEP = True
+SWEEP = {                         # name: overrides added to the best candidate; "base" = the best candidate itself
+    "base":        [],
+    "frozen":      ["model.train_blocks=0", "optim.freeze_epochs=0"],
+    "blocks_2":    ["model.train_blocks=2"],
+    "area_slices": ["data.slice_mode=area"],
+    "strong_aug":  ["aug.rotate_deg=30", "aug.intensity=0.2", "aug.scale=[0.8, 1.2]"],
+    "dropout_0.5": ["model.dropout=0.5", "optim.weight_decay=0.1"],
+}
+SWEEP_SEEDS = [0]
+RUN_FUSION = True
+FUSION_SEEDS = [0, 1, 2]
+FUSION_EXTRA = []                 # extra overrides for the fusion model
+FUSION_USE_BEST_SWEEP = False     # True: also add the best sweep entry's overrides (chosen on val)
+TIME_BUDGET_H = 11.0
+DEBUG = False
+PUSH_RESULTS = False
+NOTEBOOK_NAME = "step7"
+'''),
+    code(SETUP),
+    code(HELPERS),
+    code('''caches = check_caches(CACHE_VERSION)'''),
+    md("## A. Which normalisation / backbone is best? (ViT-only, 3 seeds each)"),
+    code(r'''import re
+slug = lambda s: re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+cand_runs, cand_preds = {}, {}
+for name, sets in CANDIDATES.items():
+    if REUSE_STEP5 and "(step 5)" in name and repo_preds("vo_base_mae_kinetic_tumor_s*") is not None:
+        cand_preds[name] = repo_preds("vo_base_mae_kinetic_tumor_s*")
+        print(f"{name}: reused the 3 step-5 seeds from results/B"); continue
+    dirs = []
+    for s in CAND_SEEDS:
+        if budget_left() < 1.0:
+            print(f"{name} seed {s} skipped: time budget"); continue
+        dirs.append(finetune("vo_base", s, sets, f"step7_cand_{slug(name)}_s{s}"))
+    cand_runs[name], cand_preds[name] = dirs, preds_of(dirs)
+first = next(iter(cand_preds))
+tab = compare(cand_preds, first)
+tab.insert(1, "train_auc", [np.nanmean([vo_train_auc(d) for d in cand_runs.get(k, [])]) if cand_runs.get(k) else np.nan
+                            for k in tab.model])
+tab.to_csv(f"{OUT}/step7_candidates.csv", index=False); display(tab.round(3))
+BEST = tab.sort_values("auc", ascending=False).model.iloc[0]
+BEST_SETS = CANDIDATES[BEST]
+save_preds("step7_vitonly_best_ensemble", cand_preds[BEST])
+note_runs("vitonly_best", cand_runs.get(BEST, []))
+json.dump({"name": BEST, "overrides": BEST_SETS}, open(f"{OUT}/best_setting.json", "w"), indent=1)
+print(f"BEST (on val): {BEST} -> {BEST_SETS}")
+'''),
+    md("## B. Point 1: regularisation of the best setting"),
+    code(r'''sweep = {}
+if RUN_SWEEP:
+    for name, extra in SWEEP.items():
+        for s in SWEEP_SEEDS:
+            reuse = cand_runs.get(BEST, [])
+            if name == "base" and s in CAND_SEEDS and CAND_SEEDS.index(s) < len(reuse):
+                sweep.setdefault(name, []).append(reuse[CAND_SEEDS.index(s)]); continue   # same run as candidate A
+            if budget_left() < 0.9:
+                print(f"{name} seed {s} skipped: time budget"); continue
+            sweep.setdefault(name, []).append(finetune("vo_base", s, BEST_SETS + extra, f"step7_sweep_{name}_s{s}"))
+    note_runs("sweep", [d for ds in sweep.values() for d in ds])
+    sp = {n: preds_of(ds) for n, ds in sweep.items()}
+    tab = compare(sp, "base")
+    tab.insert(1, "overrides", [" ".join(SWEEP[n]) or "(best candidate)" for n in tab.model])
+    tab.insert(2, "train_auc", [np.nanmean([vo_train_auc(d) for d in sweep[n]]) for n in tab.model])
+    tab.insert(3, "gap", tab.train_auc - tab.auc)
+    tab.to_csv(f"{OUT}/step7_sweep_summary.csv", index=False); display(tab.round(3))
+    best_sweep = tab.sort_values("auc", ascending=False).model.iloc[0]
+    note_runs("sweep_best", sweep[best_sweep]); save_preds("step7_sweep_best", sp[best_sweep])
+    if not RUNS_JSON.get("vitonly_best") and sweep.get("base"):
+        note_runs("vitonly_best", sweep["base"])   # best setting was reused from step 5 (no checkpoint in git):
+                                                   # the sweep's base run is that same setting, trained here
+    print(f"best on val: {best_sweep} {SWEEP[best_sweep]}. Trust it only if delong_p < 0.05 vs base; "
+          "confirm with SWEEP_SEEDS = [0, 1, 2]. gap = train AUC - val AUC (overfitting).")
+'''),
+    md("## C. Point 2: fusion with clinical data (our pipeline), overall / per cohort / within subtypes"),
+    code(r'''if RUN_FUSION:
+    fsets = BEST_SETS + list(FUSION_EXTRA)
+    if FUSION_USE_BEST_SWEEP and sweep:
+        fsets += [x for x in SWEEP[best_sweep] if x not in fsets]
+    dirs = []
+    for s in FUSION_SEEDS:
+        if budget_left() < 0.9:
+            print(f"fusion seed {s} skipped: time budget"); continue
+        dirs.append(finetune("vo_fusion", s, fsets, f"step7_fusion_s{s}"))
+    note_runs("fusion", dirs)
+    fus = save_preds("step7_fusion_ensemble", preds_of(dirs))
+    json.dump({"name": BEST, "overrides": BEST_SETS, "fusion_overrides": fsets}, open(f"{OUT}/best_setting.json", "w"), indent=1)
+    models = {"B1 clinical + size (LR)": B1_VAL, "B0 clinical (LR)": B0_VAL, "F2 fusion, old pipeline (repo)": F2_V1,
+              "B3 ViT, cache v2 (Akula)": AKULA_B3_V2, f"ViT-only ours: {BEST}": cand_preds[BEST],
+              f"Fusion ours ({len(dirs)} seeds)": fus}
+    tab = compare(models, "B1 clinical + size (LR)")
+    tab.to_csv(f"{OUT}/step7_fusion_summary.csv", index=False); display(tab.round(3))
+    print("\nAUC within subtypes (95% CI), all models on the same patients:")
+    st = subtype_wide(models); st.to_csv(f"{OUT}/step7_fusion_by_subtype.csv"); display(st)
+    print("\nAUC per cohort:")
+    sc = subtype_wide(models, "cohort"); sc.to_csv(f"{OUT}/step7_fusion_by_cohort.csv"); display(sc)
+'''),
+    code(PUSH),
+]
+
+NB08 = [
+    md("""# Step 8: statistics (point 3), leave-one-cohort-out (point 4), final test (point 4, OFF by default)
+**Point 3, statistics** on the validation predictions of every model: AUC with DeLong 95% CI, AUPRC, Brier,
+ECE, sensitivity / PPV / NPV at 90% specificity, the paired DeLong test vs the clinical baseline B1,
+calibration (reliability) plots, and AUC within subtypes and cohorts. It reads the repo's committed results plus
+the attached step-7 (and step-6) outputs.
+
+**Point 4a, leave-one-cohort-out (LOCO):** for each cohort, our ViT-only and fusion models (the best setting
+from step 7, read from its `best_setting.json`) are trained on the other two cohorts (early stopping on their
+val), then score the held-out cohort's train + val patients, which they never saw. B1 is done the same way.
+
+**Point 4b, the final test evaluation:** **once**, on the frozen final models, with thresholds from val.
+`FINAL_TEST = False` by default. Agree with the team first (plan D-006: the test set is used once; every use
+is logged). It needs the step-7 output attached (its checkpoints).
+
+Kaggle setup: GPU T4 x2 (for LOCO), Internet ON. **+ Add Input**: the caches (`mnj-cache-ispy1/-ispy2/-duke`),
+the code (`mnj-code-vaib` new version, or the `GITHUB_TOKEN` secret), and **your step-7 notebook's output**
+(+ Add Input -> Your Work -> Notebooks)."""),
+    params('''STEP = "step8"
+CACHE_VERSION = None
+RUN_STATS = True
+REFERENCE = "B1 clinical + size (LR)"
+MODELS = {   # name: run-folder name pattern (glob) under results/ of the repo or the attached outputs; seeds averaged
+    "B1 clinical + size (LR)":              "b1_lr_s0_*",
+    "B0 clinical (LR)":                     "b0_lr_s0_*",
+    "B3 ViT, old pipeline":                 "b3_vit_s0_1009-1616_*",
+    "B3 ViT, cache v2 (Akula)":             "b3_vit_s0_1019-0302_*",
+    "B3 ViT, cache v2, 2 blocks (Akula)":   "b3_vit_s0_1019-0500_*",
+    "F2 fusion, old pipeline":              "f2_attn_s0_1009-1605_*",
+    "ViT-only ours, step 5 (mae+kinetic)":  "vo_base_mae_kinetic_tumor_s*",
+    "ViT-only ours, best (step 7)":         "step7_vitonly_best_ensemble",
+    "ViT-only ours, best regularised":      "step7_sweep_best",
+    "Fusion ours (step 7)":                 "step7_fusion_ensemble",
+}
+RUN_LOCO = True
+LOCO_MODELS = {"ViT-only ours": "vo_base", "Fusion ours": "vo_fusion"}
+LOCO_SEED = 0
+LOCO_SETS = None             # None = the best setting from the attached step-7 output; or a list of overrides
+FINAL_TEST = False           # True ONCE, with the team's agreement
+FINAL_CONFIRM = ""           # must be "I use the test set once" when FINAL_TEST = True
+FINAL_MODELS = {             # name: "step:key" of runs.json written by step 7 (checkpoints from the attached output)
+    "Fusion ours": "step7:fusion",
+    "ViT-only ours, best": "step7:vitonly_best",
+}
+TIME_BUDGET_H = 11.0
+DEBUG = False
+PUSH_RESULTS = False
+NOTEBOOK_NAME = "step8"
+'''),
+    code(SETUP),
+    code(HELPERS),
+] + NB08[4:6] + [md("## Point 4a: leave-one-cohort-out (our ViT-only and fusion models, B1)"), code(LOCO_OURS)] + NB08[8:]
 
 
 def step1_for(cohort, letter, size):

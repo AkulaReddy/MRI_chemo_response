@@ -19,8 +19,12 @@ from .slabs import load_slab, raw
 
 class SlabBags(Dataset):
     def __init__(self, table: pd.DataFrame, cache_dirs: dict, norm="joint_pct", crop="tumor", k=8,
-                 train=True, slice_mode="mid", mid_frac=0.6, zoom=1.6, fov_mm=100.0, seed=0):
+                 train=True, slice_mode="mid", mid_frac=0.6, zoom=1.6, fov_mm=100.0, seed=0, encoder=None):
         self.t = table.reset_index(drop=True)
+        # clinical inputs for the fusion model (VitFusion); empty for the image-only model
+        self.clin = encoder.transform(self.t) if encoder is not None else {
+            "cat": np.zeros((len(self.t), 0), np.int64), "cont": np.zeros((len(self.t), 0), np.float32),
+            "cont_missing": np.zeros((len(self.t), 0), np.float32)}
         self.paths = [Path(cache_dirs[c]) / f"{p}.npz" for p, c in zip(self.t.pid, self.t.cohort)]
         self.norm, self.crop, self.k, self.train = norm, crop, k, train
         self.slice_mode, self.mid_frac, self.zoom, self.fov_mm = slice_mode, mid_frac, zoom, fov_mm
@@ -44,6 +48,8 @@ class SlabBags(Dataset):
         n = max(slab["x"].shape[0] - 1, 1)
         return {"images": x, "valid": valid,
                 "slice_pos": torch.from_numpy(np.pad(idx / n, (0, self.k - len(idx))).astype(np.float32)),
+                "cat": torch.from_numpy(self.clin["cat"][i]), "cont": torch.from_numpy(self.clin["cont"][i]),
+                "cont_missing": torch.from_numpy(self.clin["cont_missing"][i]),
                 "label": torch.tensor(self.labels[i]), "hr": torch.tensor(self.hr[i]),
                 "her2": torch.tensor(self.her2[i]), "index": torch.tensor(i)}
 

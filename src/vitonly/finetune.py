@@ -38,15 +38,24 @@ from src.data.transforms import train_transform  # noqa: E402
 from src.losses import pcr_loss  # noqa: E402
 from src.train import evaluate, git_sha, lr_lambda, make_loader, seed_all, to_device  # noqa: E402
 
+from src.data.clinical import ClinicalEncoder  # noqa: E402
+
 from .data import SlabBags  # noqa: E402
-from .model import VitOnly  # noqa: E402
+from .model import build  # noqa: E402
 from .slabs import cache_label, find_caches  # noqa: E402
 
 
-def datasets(cfg, tables, caches, seed):
+def datasets_kw(cfg):
+    d = cfg["data"]
+    return dict(norm=d["norm"], crop=d["crop"], slice_mode=d.get("slice_mode", "mid"),
+                mid_frac=d.get("mid_frac", 0.6), zoom=d.get("zoom", 1.6), fov_mm=d.get("fov_mm", 100.0))
+
+
+def datasets(cfg, tables, caches, seed, encoder=None):
     d = cfg["data"]
     kw = dict(norm=d["norm"], crop=d["crop"], slice_mode=d.get("slice_mode", "mid"),
-              mid_frac=d.get("mid_frac", 0.6), zoom=d.get("zoom", 1.6), fov_mm=d.get("fov_mm", 100.0))
+              mid_frac=d.get("mid_frac", 0.6), zoom=d.get("zoom", 1.6), fov_mm=d.get("fov_mm", 100.0),
+              encoder=encoder)
     tr = SlabBags(tables["train"], caches, k=d.get("k_train", 8), train=True, seed=seed, **kw)
     va = SlabBags(tables["val"], caches, k=d.get("k_eval", 12), train=False, **kw)
     return tr, va
@@ -170,8 +179,12 @@ def main(argv=None):
 
     tag = f"{cfg['name']}_{cfg['model']['backbone']}_{d['norm']}_{d['crop']}"
     run_id = f"{tag}_s{a.seed}_{time.strftime('%m%d-%H%M')}_{git_sha()}" + ("_debug" if a.debug else "")
-    run_dir = Path(a.out) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir, n = Path(a.out) / run_id, 1
+    while run_dir.exists():          # two runs started in the same minute (sweeps, debug runs): never share a folder
+        n += 1
+        run_dir = Path(a.out) / f"{run_id}_{n}"
+    run_id = run_dir.name
+    run_dir.mkdir(parents=True)
     logf = open(run_dir / "train.log", "a")
 
     def log(msg):
@@ -180,13 +193,17 @@ def main(argv=None):
         logf.write(line + "\n")
         logf.flush()
 
-    model = VitOnly(cfg["model"]).to(dev)
     tr, va = tables["train"], tables["val"]
+    fusion = cfg["model"].get("kind", "image_only") == "attn"
+    enc = ClinicalEncoder(cfg["clinical"]["features"]).fit(tr) if fusion else None   # fitted on train only
+    model = build(cfg["model"], enc).to(dev)
     log(f"run {run_id} | {dev} | caches {fmts} | norm {d['norm']} crop {d['crop']} slices {d.get('slice_mode')} | "
         f"train {len(tr)} ({int(tr.pCR.sum())} pCR) | val {len(va)} ({int(va.pCR.sum())} pCR) | "
         f"trainable params {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.1f}M")
     (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-    train_ds, val_ds = datasets(cfg, tables, caches, a.seed)
+    if enc is not None:
+        (run_dir / "encoder.json").write_text(json.dumps(enc.to_dict(), indent=2))
+    train_ds, val_ds = datasets(cfg, tables, caches, a.seed, enc)
     t0 = time.time()
     rows = fit(model, cfg, train_ds, val_ds, va, dev, run_dir, log)
     hours = (time.time() - t0) / 3600
@@ -196,6 +213,11 @@ def main(argv=None):
     val_df.to_csv(run_dir / "val_preds.csv", index=False)
     m["auc_ci"] = stats.bootstrap_auc_ci(val_df.label, val_df.prob)
     m["auc_within"] = float(np.nanmean([v["auc"] for v in m["by_cohort"].values()]))
+    if cfg.get("eval_train", True):   # training-set AUC with the eval transform: the overfitting gap
+        tr_eval = SlabBags(tr, caches, **{**datasets_kw(cfg), "k": d.get("k_eval", 12), "train": False, "encoder": enc})
+        tr_df, _, _ = evaluate(model, make_loader(tr_eval, cfg, False), tr, dev, amp)
+        tr_df.to_csv(run_dir / "train_preds.csv", index=False)
+        m["train_auc"] = stats.auc(tr_df.label, tr_df.prob)
     metrics = {"run_id": run_id, "config": cfg["name"], "config_hash": config_hash(cfg), "seed": a.seed,
                "git": git_sha(), "cohorts": cohorts, "cache_formats": fmts, "norm": d["norm"], "crop": d["crop"],
                "backbone": cfg["model"]["backbone"], "best_epoch": ck["epoch"], "epochs_run": len(rows),
@@ -203,11 +225,12 @@ def main(argv=None):
                "n_train": len(tr), "n_val": len(va), "val": m}
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=float))
     log(f"best epoch {ck['epoch']}: val AUC {m['auc']:.3f} (95% CI {m['auc_ci'][0]:.3f}-{m['auc_ci'][1]:.3f}), "
-        f"within-cohort {m['auc_within']:.3f}, AUPRC {m['auprc']:.3f}, {hours:.2f} GPU-h")
+        f"within-cohort {m['auc_within']:.3f}, AUPRC {m['auprc']:.3f}, train AUC {m.get('train_auc', float('nan')):.3f}, "
+        f"{hours:.2f} GPU-h")
     if a.results_dir:
         dst = Path(a.results_dir) / run_dir.name
         dst.mkdir(parents=True, exist_ok=True)
-        for f in ("config_resolved.yaml", "log.csv", "metrics.json", "val_preds.csv", "train.log"):
+        for f in ("config_resolved.yaml", "log.csv", "metrics.json", "val_preds.csv", "train.log", "encoder.json"):
             if (run_dir / f).exists():
                 shutil.copy(run_dir / f, dst / f)
         log(f"copied summary files to {dst}")

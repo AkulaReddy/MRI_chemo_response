@@ -212,3 +212,33 @@ def test_frozen_backbone_gets_no_gradient(backbone):
     n_blocks = m.encoder.n_layers
     trained = [i for i, b in enumerate(m.encoder.blocks) if any(p.requires_grad for p in b.parameters())]
     assert trained == list(range(n_blocks - 2, n_blocks))
+
+
+@pytest.mark.parametrize("config", ["vo_fusion", "vo_base"])
+def test_fusion_and_image_only_runs_rescore_identically(v2_cache, tmp_path, config):
+    """Our fusion model (VitFusion + clinical tokens) trains, reports train AUC, and src.predict_run reloads
+    the checkpoint (with its clinical encoder) to the same val predictions."""
+    import torch
+    from src.predict_run import score_run
+    from src.vitonly.finetune import main
+    root = str(Path(v2_cache["ispy1"]).parent)
+    run = main(["--config", config, "--cpu", "--cache-root", root, "--out", str(tmp_path / "runs"), "--set",
+                "model.backbone=tiny-random", "model.grad_checkpointing=false", "optim.max_epochs=1",
+                "optim.freeze_epochs=0", "data.num_workers=0", "optim.batch_patients=4", "data.k_train=3",
+                "data.k_eval=4"])
+    m = json.loads((run / "metrics.json").read_text())
+    assert 0 <= m["val"]["train_auc"] <= 1 and (run / "train_preds.csv").exists()
+    assert (run / "encoder.json").exists() == (config == "vo_fusion")
+    df = score_run(run, ["ispy1", "duke"], ["val"], cache_roots=[root], dev=torch.device("cpu"))
+    ref = pd.read_csv(run / "val_preds.csv").set_index("pid").prob
+    assert len(df) == 16 and np.allclose(df.set_index("pid").prob.loc[ref.index], ref, atol=1e-5)
+
+
+def test_runs_in_the_same_minute_get_their_own_folders(v2_cache, tmp_path):
+    from src.vitonly.finetune import main
+    args = ["--config", "vo_base", "--cpu", "--cache-root", str(Path(v2_cache["ispy1"]).parent), "--out",
+            str(tmp_path / "runs"), "--set", "model.backbone=tiny-random", "model.grad_checkpointing=false",
+            "optim.max_epochs=1", "optim.freeze_epochs=0", "data.num_workers=0", "optim.batch_patients=4",
+            "data.k_train=2", "data.k_eval=2", "eval_train=false"]
+    a, b = main(args), main(args)
+    assert a != b and (a / "best.pt").exists() and (b / "best.pt").exists()

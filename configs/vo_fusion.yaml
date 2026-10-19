@@ -1,0 +1,12 @@
+# Our ViT pipeline + attention fusion with clinical data (src/vitonly/model.VitFusion; the F2 design).
+# Same normalisation / crop / backbone keys as vo_base; set them from the best ViT-only setting.
+inherit: vo_base.yaml
+clinical:
+  features: [HR, HER2, race, menopause, age, log_bbox_vol]
+model:
+  kind: attn
+  d_model: 256
+  n_layers: 2
+  n_heads: 4
+  ffn: 512
+  dropout: 0.2

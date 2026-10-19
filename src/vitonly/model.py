@@ -65,3 +65,51 @@ class VitOnly(nn.Module):
         else:
             res["logit"] = self.head(self.drop(res["img_emb"])).squeeze(-1)
         return res
+
+
+class VitFusion(VitOnly):
+    """Our ViT input pipeline (normalisation, tumour crop, backbone) + the F2 attention fusion with clinical data.
+
+    Tokens, as in src/models/fusion.PCRModel(kind="attn", aggregation="tokens"): a learned [CLS], one token per
+    slice (backbone feature -> d_model, + slice position), one token per clinical feature (HR, HER2, race,
+    menopause, age, log tumour-box volume), then n_layers pre-norm transformer layers; [CLS] -> logit.
+    `attn` (B, T, T) of the last layer is returned for interpretation (row 0 = what [CLS] attended to).
+    """
+
+    def __init__(self, m: dict, cardinalities, n_cont):
+        super().__init__(m)
+        from src.models.fusion import ClinicalTokens, FusionBlock
+        D, d, p = self.head.in_features, m.get("d_model", 256), m.get("dropout", 0.2)
+        self.img_proj = nn.Sequential(nn.Linear(D, d), nn.LayerNorm(d))
+        self.slice_pos = nn.Linear(1, d)
+        self.img_type = nn.Parameter(torch.randn(1, 1, d) * 0.02)
+        self.cls = nn.Parameter(torch.zeros(1, 1, d))
+        self.clin = ClinicalTokens(cardinalities, n_cont, d)
+        self.blocks = nn.ModuleList(FusionBlock(d, m.get("n_heads", 4), m.get("ffn", 512), p)
+                                    for _ in range(m.get("n_layers", 2)))
+        self.norm = nn.LayerNorm(d)
+        self.head = nn.Linear(d, 1)
+        if self.agg == "mil":
+            del self.mil
+
+    def forward(self, batch):
+        valid = batch["valid"]
+        h = self.features(batch["images"], valid)                        # (B, K, D)
+        res = {"img_emb": masked_mean(h, valid)}
+        img = self.img_proj(h) + self.slice_pos(batch["slice_pos"].unsqueeze(-1).to(h.dtype)) + self.img_type
+        clin = self.clin(batch["cat"], batch["cont"], batch["cont_missing"]).to(img.dtype)
+        b = img.shape[0]
+        x = torch.cat([self.cls.expand(b, -1, -1).to(img.dtype), img, clin], 1)
+        keep = torch.cat([valid.new_ones((b, 1)), valid, valid.new_ones((b, clin.shape[1]))], 1)
+        for blk in self.blocks:
+            x, w = blk(x, ~keep)
+        res["logit"] = self.head(self.drop(self.norm(x[:, 0]))).squeeze(-1)
+        res["attn"] = w
+        return res
+
+
+def build(m: dict, encoder=None):
+    """VitFusion when model.kind is "attn" (needs the fitted ClinicalEncoder), else image-only VitOnly."""
+    if m.get("kind", "image_only") == "attn":
+        return VitFusion(m, encoder.cardinalities, len(encoder.cont))
+    return VitOnly(m)
