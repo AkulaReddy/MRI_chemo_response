@@ -19,8 +19,10 @@ from .metadata import load_metadata, load_split, patient_table  # noqa: F401  (r
 
 class PatientBags(Dataset):
     def __init__(self, table: pd.DataFrame, cache_dirs: dict, encoder: ClinicalEncoder,
-                 k: int = 8, train: bool = True, margin: int = 0, preload: bool = False, seed: int = 0):
+                 k: int = 8, train: bool = True, margin: int = 0, preload: bool = False, seed: int = 0,
+                 min_area_frac: float = 0.0):
         self.t = table.reset_index(drop=True)
+        self.min_area_frac = min_area_frac
         self.paths = [Path(cache_dirs[c]) / f"{p}.npz" for p, c in zip(self.t.pid, self.t.cohort)]
         self.clin = encoder.transform(self.t)
         self.k, self.train, self.margin = k, train, margin
@@ -37,6 +39,12 @@ class PatientBags(Dataset):
         d = np.load(self.paths[i])
         t0, t1 = int(d["t0"]), int(d["t1"])
         n = d["rgb"].shape[0]
+        if self.min_area_frac > 0 and ("area" in d.files or "mask" in d.files):
+            # drop tumour slices whose mask area is under min_area_frac of the largest one (I-SPY only:
+            # Duke has no mask, so all its tumour slices are kept). Margin slices are not added here.
+            a = d["area"][t0:t1] if "area" in d.files else d["mask"][t0:t1].sum((1, 2))
+            keep = np.flatnonzero(a >= self.min_area_frac * max(int(a.max()), 1))
+            return d["rgb"][t0:t1][keep if len(keep) else [int(np.argmax(a))]]
         lo, hi = max(0, t0 - self.margin), min(n, t1 + self.margin)
         return d["rgb"][lo:hi]                                   # (S, 240, 240, 3) uint8
 

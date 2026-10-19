@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.5"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.6"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -176,8 +176,9 @@ for c, out in OUTS.items():
     "10_train.ipynb": [
         md("""# 10 Train / export (GPU)
 1. Session options: Accelerator **GPU T4 x2 or P100** (one GPU is used), Internet **ON**, secret `GITHUB_TOKEN`.
-2. **+ Add Input**: the cache Datasets `mnj-cache-ispy1`, `mnj-cache-ispy2`, `mnj-cache-duke`
-   (and, for `f2_from_b3` or export, the weights Dataset `mnj-w-<run_id>`).
+2. **+ Add Input**: the cache Dataset **`mnj-cache-v2`** (builder v2, all three cohorts; from `d1.5`)
+   (and, for `f2_from_b3` or export, the weights Dataset `mnj-w-<run_id>`). With `CACHE_VERSION = 2`
+   the run stops if any cohort's cache is not v2; the caches used are printed and saved in metrics.json.
 3. Set the parameters. First run of the day: `DEBUG = True` (2 epochs, 48 patients, a few minutes).
 4. Real runs: **Save Version -> Save & Run All (Commit)** so it keeps running with the browser closed.
 5. Afterwards: **New Dataset** from the output -> name it `mnj-w-<run_id>` (the run_id is printed at the end).
@@ -189,7 +190,8 @@ DEBUG = False
 DATASETS = []           # [] = all cohorts in the config; ["ispy1"] if only that cache exists yet
 CHECKPOINT = ""         # MODE="export": path to best.pt under /kaggle/input/mnj-w-<run_id>/...
 INIT_FROM = ""          # f2_from_b3: path to the B3 best.pt
-EXTRA = []              # optional overrides, e.g. ["optim.max_epochs=20"]
+CACHE_VERSION = 2       # required cache builder version (2 = mnj-cache-v2); None = take whatever is attached
+EXTRA = []              # optional overrides, e.g. ["optim.patience=15"] or ["data.min_area_frac=0.1"]
 PUSH_RESULTS = True     # commit results/<PERSON>/<run_id>/ (small files only) to GitHub
 '''),
         code(SETUP),
@@ -197,6 +199,7 @@ PUSH_RESULTS = True     # commit results/<PERSON>/<run_id>/ (small files only) t
        "--cache-root", "/kaggle/input", "--out", "/kaggle/working/runs",
        "--results-dir", f"/kaggle/working/results/{PERSON}"]
 if DEBUG: cmd.append("--debug")
+if CACHE_VERSION is not None: cmd += ["--cache-version", str(CACHE_VERSION)]
 if DATASETS: cmd += ["--cohorts", *DATASETS]
 if CHECKPOINT:
     # export writes next to the checkpoint; /kaggle/input is read-only, so copy the run folder first
@@ -216,6 +219,7 @@ if os.path.exists(f"{RUN_DIR}/metrics.json"):
     v = m["val"]
     print(f"val AUC {v['auc']:.3f} (CI {v['auc_ci'][0]:.3f}-{v['auc_ci'][1]:.3f}) AUPRC {v['auprc']:.3f} "
           f"ECE {v['ece']:.3f} | best epoch {m['best_epoch']} | {m['gpu_hours']} GPU-h")
+    print("caches:", {c: f"v{i['builder_version']}" for c, i in m.get("caches", {}).items()})
 '''),
         code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
     ],

@@ -5,6 +5,7 @@ data:
   k_train: 8          # random tumor slices per patient per step
   k_eval: 16          # evenly spaced tumor slices per patient at evaluation
   margin: 0           # extra slices beyond the tumor range (ablation: 2)
+  min_area_frac: 0.0  # >0: skip tumour slices with mask area < this x the largest (I-SPY, v2 `area`)
   preload: false      # true = keep all slices in RAM (faster, ~10 GB for all cohorts)
   num_workers: 4
   sampler: random     # random | balanced

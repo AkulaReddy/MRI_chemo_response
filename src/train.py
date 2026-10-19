@@ -205,7 +205,8 @@ def export(model, cfg, tables, cache_dirs, enc, dev, amp, run_dir, log):
     k = cfg.get("export", {}).get("k", 32)
     preds, slices, embs = [], [], {}
     for name, t in tables.items():
-        ds = PatientBags(t, cache_dirs, enc, k=k, train=False, margin=cfg["data"].get("margin", 0))
+        ds = PatientBags(t, cache_dirs, enc, k=k, train=False, margin=cfg["data"].get("margin", 0),
+                         min_area_frac=float(cfg["data"].get("min_area_frac", 0.0)))
         loader = make_loader(ds, {**cfg, "optim": {**cfg["optim"], "batch_patients": 4}}, False)
         pr = predict(model, loader, dev, amp, want_attn=True)
         tt = t.reset_index(drop=True).iloc[pr["index"]]
@@ -236,6 +237,8 @@ def main(argv=None):
     ap.add_argument("--cache-root", nargs="*", default=None,
                     help="folders searched for caches (default: /kaggle/input on Kaggle, else data/cache)")
     ap.add_argument("--cache", nargs="*", default=[], help="explicit cohort=dir pairs")
+    ap.add_argument("--cache-version", type=int, default=None,
+                    help="require this cache builder version for every cohort (e.g. 2); stops otherwise")
     ap.add_argument("--cohorts", nargs="*", default=None, help="restrict to these cohorts (e.g. ispy1)")
     ap.add_argument("--out", default=str(ROOT / "runs"))
     ap.add_argument("--mode", choices=["train", "export"], default="train")
@@ -268,6 +271,16 @@ def main(argv=None):
     missing = set(a.cohorts or d["cohorts"]) - set(cohorts)
     if missing:
         print(f"WARNING: no cache for {sorted(missing)}; training on {cohorts} only")
+    cache_info = {}
+    for c in cohorts:
+        m = json.load(open(os.path.join(caches[c], "cache_meta.json")))
+        cache_info[c] = {"dir": str(caches[c]), "builder_version": m.get("builder_version", 1),
+                         "grid_mm": m.get("grid_mm"), "git": m.get("git")}
+    print("caches:", {c: f"v{i['builder_version']} {i['dir']}" for c, i in cache_info.items()})
+    if a.cache_version is not None:
+        wrong = {c: i["builder_version"] for c, i in cache_info.items() if i["builder_version"] != a.cache_version}
+        if wrong:
+            raise SystemExit(f"--cache-version {a.cache_version} required, but found {wrong}: attach mnj-cache-v2")
     train_t = patient_table(d.get("train_splits", ["train"]), cohorts, cache_dirs=caches)
     val_t = patient_table(["val"], [c for c in d.get("val_cohorts", cohorts) if c in caches], cache_dirs=caches)
     if d.get("limit"):
@@ -305,9 +318,11 @@ def main(argv=None):
         (run_dir / "config_resolved.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
         (run_dir / "encoder.json").write_text(json.dumps(enc.to_dict(), indent=2))
         k_tr, k_ev, margin = d.get("k_train", 8), d.get("k_eval", 16), d.get("margin", 0)
+        maf = float(d.get("min_area_frac", 0.0))
         train_ds = PatientBags(train_t, caches, enc, k=k_tr, train=True, margin=margin,
-                               preload=d.get("preload", False), seed=a.seed)
-        val_ds = PatientBags(val_t, caches, enc, k=k_ev, train=False, margin=margin, preload=d.get("preload", False))
+                               preload=d.get("preload", False), seed=a.seed, min_area_frac=maf)
+        val_ds = PatientBags(val_t, caches, enc, k=k_ev, train=False, margin=margin, preload=d.get("preload", False),
+                             min_area_frac=maf)
         t0 = time.time()
         rows = fit(model, cfg, train_ds, val_ds, val_t, dev, run_dir, log)
         hours = (time.time() - t0) / 3600
@@ -319,7 +334,7 @@ def main(argv=None):
         metrics = {"run_id": run_id, "config": cfg["name"], "config_hash": config_hash(cfg), "seed": a.seed,
                    "git": git_sha(), "cohorts": cohorts, "best_epoch": ck["epoch"], "epochs_run": len(rows),
                    "gpu_hours": round(hours, 3), "device": torch.cuda.get_device_name(0) if dev.type == "cuda"
-                   else "cpu", "n_train": len(train_t), "n_val": len(val_t), "val": m}
+                   else "cpu", "n_train": len(train_t), "n_val": len(val_t), "caches": cache_info, "val": m}
         (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=float))
         log(f"best epoch {ck['epoch']}: val AUC {m['auc']:.3f} (95% CI {m['auc_ci'][0]:.3f}-{m['auc_ci'][1]:.3f}),"
             f" AUPRC {m['auprc']:.3f}, ECE {m['ece']:.3f}, {hours:.2f} GPU-h")
