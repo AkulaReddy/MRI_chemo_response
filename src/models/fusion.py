@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 
 from .pooling import GatedAttentionMIL, masked_mean
-from .vit_encoder import ViTEncoder
+from .backbones import build_encoder
 
 
 class FusionBlock(nn.Module):
@@ -65,8 +65,11 @@ class PCRModel(nn.Module):
         assert self.kind in self.KINDS and self.agg in self.AGGS, (self.kind, self.agg)
         assert not (self.agg == "tokens" and self.kind != "attn"), "tokens aggregation needs kind=attn"
         assert not (self.agg == "mean_logit" and self.kind != "image_only"), "mean_logit is for image_only"
-        self.encoder = ViTEncoder(m["backbone"], m.get("pretrained", True), m.get("train_blocks", 4),
-                                  m.get("grad_checkpointing", True))
+        self.encoder = build_encoder(m)
+        # which DCE phases the encoder sees: "rgb" = pre/early/late as R/G/B (default); "early" = the early
+        # post-contrast phase copied into all 3 channels (= a 1-channel input with the RGB filters summed)
+        self.input_phases = m.get("input_phases", "rgb")
+        assert self.input_phases in ("rgb", "early"), self.input_phases
         D, d, p = self.encoder.dim, m.get("d_model", 256), m.get("dropout", 0.2)
         self.drop = nn.Dropout(p)
         if self.agg == "mil":
@@ -108,6 +111,8 @@ class PCRModel(nn.Module):
     def encode(self, images, valid, output_attentions=False):
         b, k = images.shape[:2]
         flat = images.flatten(0, 1)
+        if self.input_phases == "early":
+            flat = flat[:, 1:2].expand(-1, 3, -1, -1)
         sel = valid.flatten()
         out = self.encoder(flat[sel], output_attentions=output_attentions)   # only real slices
         cls = out["cls"].new_zeros((b * k, out["cls"].shape[-1]))

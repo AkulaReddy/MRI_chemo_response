@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.7"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.8"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -250,6 +250,7 @@ RUNS = {                          # name: overrides; the FIRST entry is the base
     "dropout_0.5":  ["optim.patience=15", "model.dropout=0.5", "optim.weight_decay=0.1"],
     "supervised":   ["optim.patience=15", "model.backbone=google/vit-base-patch16-224"],  # ImageNet-supervised ViT
 }
+BASELINE = None                   # or {"name": ..., "val_preds": path to an earlier run's val_preds.csv}
 CACHE_VERSION = 2
 DEBUG = False
 TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
@@ -318,16 +319,26 @@ import matplotlib.pyplot as plt
 
 S = pd.DataFrame(rows)
 ok = S[S.status == "ok"].copy()
-base = next(iter(RUNS))
 preds = {(r.name, r.seed): pd.read_csv(f"{RES}/{r.run_id}/val_preds.csv").set_index("pid") for r in ok.itertuples()}
+if BASELINE:   # an earlier run (in the repo clone) is the baseline; every run here is compared with it
+    base = BASELINE["name"]
+    ext = pd.read_csv(BASELINE["val_preds"]).set_index("pid")
+    print(f"baseline '{base}' from {BASELINE['val_preds']}: val AUC {stats.auc(ext.label, ext.prob):.4f}")
+    get_base = lambda seed: ext
+else:          # the first entry of RUNS, same seed
+    base = next(iter(RUNS))
+    get_base = lambda seed: preds.get((base, seed))
 for col in ("vs_base", "vs_base_ci", "vs_base_p"):
     ok[col] = None
-for i, r in ok.iterrows():   # paired bootstrap against the baseline run with the same seed
-    b = preds.get((base, r.seed))
+for i, r in ok.iterrows():   # paired bootstrap against the baseline
+    b = get_base(r.seed)
     if b is None or r["name"] == base:
         continue
-    p = preds[(r["name"], r.seed)].loc[b.index]
-    d = stats.paired_bootstrap_auc_diff(b.label, b.prob, p.prob)
+    p = preds[(r["name"], r.seed)]
+    common = b.index.intersection(p.index)          # same val patients in both (all 177 normally)
+    if len(common) < len(b):
+        print(f"{r['name']}: compared on {len(common)} of {len(b)} baseline patients")
+    d = stats.paired_bootstrap_auc_diff(b.loc[common, "label"], b.loc[common, "prob"], p.loc[common, "prob"])
     ok.at[i, "vs_base"], ok.at[i, "vs_base_ci"], ok.at[i, "vs_base_p"] = (
         round(d["diff"], 3), f"{d['ci'][0]:+.3f} to {d['ci'][1]:+.3f}", round(d["p"], 3))
 cols = ["name", "seed", "val_auc", "ci_lo", "ci_hi", "vs_base", "vs_base_ci", "vs_base_p", "auprc", "ece",
@@ -353,6 +364,46 @@ plt.tight_layout(); plt.savefig(f"{RES}/curves.png", dpi=90); plt.show()
         code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
     ],
 }
+
+
+# 12_backbones: the sweep notebook with other defaults (DINOv2 and ResNet-18 on the early phase only)
+NOTEBOOKS["12_backbones.ipynb"] = [
+    md("""# 12 Backbones: DINOv2 ViT-B and ResNet-18 on the early post-contrast phase (GPU)
+Same machinery as `11_sweep` (runs one after the other, paired comparison with the first entry, curves,
+push), with these defaults:
+- **baseline** (not retrained): sweep 1's `blocks_2` run (MAE ViT, 2 trainable blocks, pre/early/late as RGB,
+  val AUC 0.579), read from its `val_preds.csv` in the repo;
+- `mae_early`: the same model on the **early phase only** (copied into the 3 channels = a 1-channel input), to
+  separate the effect of the input from the effect of the backbone;
+- `dinov2_early`: **DINOv2 ViT-B/14** (`facebook/dinov2-base`), top 2 blocks fine-tuned;
+- `resnet18_early`: **ImageNet ResNet-18**, all stages fine-tuned, backbone LR 1e-4.
+
+1. Session options: **GPU**, Internet **ON** (downloads DINOv2 and ResNet weights), secret `GITHUB_TOKEN`.
+2. **+ Add Input**: `mnj-cache-v2`.
+3. `DEBUG = True` first (minutes), then `DEBUG = False` and **Save Version -> Save & Run All (Commit)**
+   (about 1.5-2 h).
+
+Read the table as in `11_sweep`: a setting is better only if its paired CI vs the baseline is above 0."""),
+    params('''CONFIG = "b3_vit"
+SEEDS = [0]
+P = ["optim.patience=15"]
+RUNS = {                          # name: overrides; all are compared with BASELINE below
+    "mae_early":      P + ["model.train_blocks=2", "model.input_phases=early"],
+    "dinov2_early":   P + ["model.backbone=facebook/dinov2-base", "model.train_blocks=2", "model.input_phases=early"],
+    "resnet18_early": P + ["model.backbone=resnet18", "model.train_blocks=all", "model.input_phases=early",
+                           "optim.lr_backbone=1.0e-4"],
+}
+# baseline = sweep 1's blocks_2 run (MAE ViT, RGB, 2 blocks, seed 0, val AUC 0.579), not retrained here
+BASELINE = {"name": "mae_rgb (sweep 1 blocks_2)",
+            "val_preds": "results/A/sweep_b3_vit_1019-0406/b3_vit_s0_1019-0500_4662d29/val_preds.csv"}
+CACHE_VERSION = 2
+DEBUG = False
+TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
+KEEP_CHECKPOINTS = True           # best.pt: ~350 MB (ViT) / ~45 MB (ResNet-18) per run
+PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
+'''),
+    *NOTEBOOKS["11_sweep.ipynb"][2:],
+]
 
 
 def main():

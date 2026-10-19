@@ -13,9 +13,10 @@ clinical:
   features: [HR, HER2, race, menopause, age, log_bbox_vol]
 model:
   kind: attn                       # image_only | concat | attn
-  backbone: facebook/vit-mae-base  # or google/vit-base-patch16-224 (supervised ablation)
+  backbone: facebook/vit-mae-base  # or google/vit-base-patch16-224, facebook/dinov2-base, resnet18
   pretrained: true
   train_blocks: 4                  # top ViT blocks fine-tuned (ablation: 2 / all)
+  input_phases: rgb                # rgb = pre/early/late as R/G/B; early = early phase x3 (grey)
   grad_checkpointing: true
   aggregation: tokens              # mean_logit | mean | mil | tokens
   d_model: 256
