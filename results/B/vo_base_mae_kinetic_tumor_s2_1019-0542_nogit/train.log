@@ -1,0 +1,15 @@
+[05:42:11] run vo_base_mae_kinetic_tumor_s2_1019-0542_nogit | cuda | caches {'ispy1': 'v1', 'ispy2': 'v1', 'duke': 'v1'} | norm kinetic crop tumor slices mid | train 1098 (321 pCR) | val 177 (53 pCR) | trainable params 28.4M
+[05:43:24] epoch  0 (frozen) loss 0.6061 val AUC 0.477 AUPRC 0.298 | duke 0.54 ispy1 0.41 ispy2 0.49 | 145 slices/s, 1.2 min  *best
+[05:44:36] epoch  1 (frozen) loss 0.6059 val AUC 0.523 AUPRC 0.316 | duke 0.55 ispy1 0.46 ispy2 0.56 | 145 slices/s, 1.2 min  *best
+[05:45:53] epoch  2 loss 0.6112 val AUC 0.541 AUPRC 0.328 | duke 0.52 ispy1 0.46 ispy2 0.59 | 136 slices/s, 1.3 min  *best
+[05:47:11] epoch  3 loss 0.6022 val AUC 0.555 AUPRC 0.343 | duke 0.58 ispy1 0.48 ispy2 0.57 | 135 slices/s, 1.3 min  *best
+[05:48:27] epoch  4 loss 0.6018 val AUC 0.567 AUPRC 0.389 | duke 0.55 ispy1 0.49 ispy2 0.60 | 136 slices/s, 1.3 min  *best
+[05:49:45] epoch  5 loss 0.5865 val AUC 0.578 AUPRC 0.450 | duke 0.48 ispy1 0.51 ispy2 0.63 | 135 slices/s, 1.3 min  *best
+[05:51:02] epoch  6 loss 0.5872 val AUC 0.565 AUPRC 0.406 | duke 0.42 ispy1 0.48 ispy2 0.62 | 136 slices/s, 1.3 min
+[05:52:18] epoch  7 loss 0.5774 val AUC 0.555 AUPRC 0.368 | duke 0.40 ispy1 0.50 ispy2 0.60 | 136 slices/s, 1.3 min
+[05:53:35] epoch  8 loss 0.5610 val AUC 0.556 AUPRC 0.389 | duke 0.42 ispy1 0.53 ispy2 0.59 | 136 slices/s, 1.3 min
+[05:54:52] epoch  9 loss 0.5616 val AUC 0.563 AUPRC 0.422 | duke 0.43 ispy1 0.52 ispy2 0.61 | 136 slices/s, 1.3 min
+[05:56:08] epoch 10 loss 0.5360 val AUC 0.562 AUPRC 0.413 | duke 0.42 ispy1 0.59 ispy2 0.60 | 137 slices/s, 1.3 min
+[05:57:25] epoch 11 loss 0.5296 val AUC 0.552 AUPRC 0.397 | duke 0.43 ispy1 0.58 ispy2 0.59 | 135 slices/s, 1.3 min
+[05:57:25] early stop: no val AUC gain for 6 epochs
+[05:57:40] best epoch 5: val AUC 0.578 (95% CI 0.476-0.677), within-cohort 0.538, AUPRC 0.450, 0.25 GPU-h
