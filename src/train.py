@@ -291,8 +291,12 @@ def main(argv=None):
     if a.mode == "export":
         run_dir = Path(a.checkpoint).resolve().parent
     else:
-        run_dir = Path(a.out) / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir, n = Path(a.out) / run_id, 1
+        while run_dir.exists():          # two runs started in the same minute (e.g. a sweep of short runs)
+            n += 1
+            run_dir = Path(a.out) / f"{run_id}_{n}"
+        run_id = run_dir.name
+        run_dir.mkdir(parents=True)
     logf = open(run_dir / ("train.log" if a.mode == "train" else "export.log"), "a")
 
     def log(msg):

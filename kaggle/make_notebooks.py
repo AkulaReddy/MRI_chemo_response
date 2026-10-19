@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.6"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.7"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -220,6 +220,132 @@ if os.path.exists(f"{RUN_DIR}/metrics.json"):
     print(f"val AUC {v['auc']:.3f} (CI {v['auc_ci'][0]:.3f}-{v['auc_ci'][1]:.3f}) AUPRC {v['auprc']:.3f} "
           f"ECE {v['ece']:.3f} | best epoch {m['best_epoch']} | {m['gpu_hours']} GPU-h")
     print("caches:", {c: f"v{i['builder_version']}" for c, i in m.get("caches", {}).items()})
+'''),
+        code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
+    ],
+    "11_sweep.ipynb": [
+        md("""# 11 Sweep: several training settings in one session (GPU)
+Runs every entry of `RUNS` (x every seed) one after the other, then compares them on the validation set.
+1. Session options: Accelerator **GPU T4 x2 or P100**, Internet **ON**, secret `GITHUB_TOKEN`.
+2. **+ Add Input**: `mnj-cache-v2`.
+3. Edit `RUNS`. The **first entry is the baseline**; every other run is compared with it. Change one
+   thing per entry, so each difference has one cause.
+4. `DEBUG = True` first (2 epochs, 48 patients per run, minutes), then `DEBUG = False` and
+   **Save Version -> Save & Run All (Commit)**. Runs that won't fit in `TIME_BUDGET_H` are skipped
+   (Kaggle stops a session after 12 h); `summary.csv` is rewritten after every run, so a cut session
+   still keeps what finished.
+
+**Reading the table (val = 177 patients, 53 pCR+):** one AUC has a 95% CI of about +-0.08, so most
+small differences are noise. Trust a setting only if its **paired** difference vs the baseline has a
+CI above 0, and confirm it with more seeds before adopting it. Never tune on the test set."""),
+        params('''CONFIG = "b3_vit"
+SEEDS = [0]                       # add seeds (e.g. [0, 1, 2]) to confirm a winner
+RUNS = {                          # name: overrides; the FIRST entry is the baseline
+    "base":         ["optim.patience=15"],
+    "min_area_0.1": ["optim.patience=15", "data.min_area_frac=0.1"],
+    "all_blocks":   ["optim.patience=15", "model.train_blocks=all", "optim.lr_backbone=1.0e-4"],
+    "lr_bb_1e-4":   ["optim.patience=15", "optim.lr_backbone=1.0e-4"],
+    "k_train_16":   ["optim.patience=15", "data.k_train=16"],
+}
+CACHE_VERSION = 2
+DEBUG = False
+TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
+KEEP_CHECKPOINTS = False          # best.pt is ~350 MB per run; False deletes it after the run
+PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
+'''),
+        code(SETUP),
+        code(r'''import glob, time
+import pandas as pd
+
+SEED = "sweep"   # used in the push commit message
+SWEEP_ID = f"sweep_{CONFIG}_{time.strftime('%m%d-%H%M')}" + ("_debug" if DEBUG else "")
+RES = f"/kaggle/working/results/{PERSON}/{SWEEP_ID}"
+os.makedirs(RES, exist_ok=True)
+json.dump({"config": CONFIG, "seeds": SEEDS, "runs": RUNS, "git_tag": GIT_TAG, "debug": DEBUG},
+          open(f"{RES}/sweep.json", "w"), indent=2)
+rows, t_start, durations = [], time.time(), []
+
+def finished_run_dir(before):
+    new = sorted(set(glob.glob("/kaggle/working/runs/*/")) - before, key=os.path.getmtime)
+    return os.path.normpath(new[-1]) if new else None
+
+for name, extra in RUNS.items():
+    for seed in SEEDS:
+        used_h = (time.time() - t_start) / 3600
+        est_h = (sum(durations) / len(durations) / 3600) if durations else 0
+        if used_h + est_h > TIME_BUDGET_H:
+            print(f"skip {name} seed {seed}: {used_h:.1f} h used, next run needs ~{est_h:.1f} h")
+            rows.append({"name": name, "seed": seed, "status": "skipped (time)"})
+            continue
+        cmd = [sys.executable, "-m", "src.train", "--config", CONFIG, "--seed", str(seed), "--mode", "train",
+               "--cache-root", "/kaggle/input", "--out", "/kaggle/working/runs", "--results-dir", RES]
+        if CACHE_VERSION is not None:
+            cmd += ["--cache-version", str(CACHE_VERSION)]
+        if DEBUG:
+            cmd.append("--debug")
+        if extra:
+            cmd += ["--set", *extra]
+        print(f"\n===== {name} seed {seed}: {' '.join(extra) or '(defaults)'}", flush=True)
+        before, t = set(glob.glob("/kaggle/working/runs/*/")), time.time()
+        rc = subprocess.run(cmd).returncode
+        durations.append(time.time() - t)
+        run_dir = finished_run_dir(before)
+        row = {"name": name, "seed": seed, "overrides": " ".join(extra), "status": "ok" if rc == 0 else f"exit {rc}",
+               "run_id": os.path.basename(run_dir) if run_dir else None, "minutes": round(durations[-1] / 60, 1)}
+        if rc == 0 and run_dir and os.path.exists(f"{run_dir}/metrics.json"):
+            m = json.load(open(f"{run_dir}/metrics.json"))
+            v = m["val"]
+            log = pd.read_csv(f"{run_dir}/log.csv")
+            row.update(val_auc=round(v["auc"], 4), ci_lo=round(v["auc_ci"][0], 3), ci_hi=round(v["auc_ci"][1], 3),
+                       auprc=round(v["auprc"], 3), ece=round(v["ece"], 3), best_epoch=m["best_epoch"],
+                       epochs_run=m["epochs_run"], max_val_auc_any_epoch=round(log.val_auc.max(), 4),
+                       **{f"auc_{c}": round(x["auc"], 3) for c, x in v.get("by_cohort", {}).items()})
+            print(f"===== {name} seed {seed}: val AUC {v['auc']:.3f} (CI {v['auc_ci'][0]:.3f}-{v['auc_ci'][1]:.3f}), "
+                  f"best epoch {m['best_epoch']} of {m['epochs_run']}, {row['minutes']} min", flush=True)
+        if run_dir and not KEEP_CHECKPOINTS:
+            for f in glob.glob(f"{run_dir}/*.pt"):
+                os.remove(f)
+        rows.append(row)
+        pd.DataFrame(rows).to_csv(f"{RES}/summary.csv", index=False)   # saved after every run
+print(f"\nsweep done in {(time.time() - t_start) / 3600:.2f} h -> {RES}/summary.csv")
+'''),
+        code(r'''from src import stats
+from IPython.display import display
+import matplotlib.pyplot as plt
+
+S = pd.DataFrame(rows)
+ok = S[S.status == "ok"].copy()
+base = next(iter(RUNS))
+preds = {(r.name, r.seed): pd.read_csv(f"{RES}/{r.run_id}/val_preds.csv").set_index("pid") for r in ok.itertuples()}
+for col in ("vs_base", "vs_base_ci", "vs_base_p"):
+    ok[col] = None
+for i, r in ok.iterrows():   # paired bootstrap against the baseline run with the same seed
+    b = preds.get((base, r.seed))
+    if b is None or r["name"] == base:
+        continue
+    p = preds[(r["name"], r.seed)].loc[b.index]
+    d = stats.paired_bootstrap_auc_diff(b.label, b.prob, p.prob)
+    ok.at[i, "vs_base"], ok.at[i, "vs_base_ci"], ok.at[i, "vs_base_p"] = (
+        round(d["diff"], 3), f"{d['ci'][0]:+.3f} to {d['ci'][1]:+.3f}", round(d["p"], 3))
+cols = ["name", "seed", "val_auc", "ci_lo", "ci_hi", "vs_base", "vs_base_ci", "vs_base_p", "auprc", "ece",
+        "best_epoch", "epochs_run", "max_val_auc_any_epoch", "auc_duke", "auc_ispy1", "auc_ispy2", "minutes"]
+print(f"baseline = '{base}'. vs_base = AUC(run) - AUC(baseline), paired bootstrap on the same val patients.")
+display(ok[[c for c in cols if c in ok]].sort_values("val_auc", ascending=False))
+if len(SEEDS) > 1:
+    print("mean over seeds:")
+    display(ok.groupby("name")[["val_auc", "auprc", "ece", "best_epoch"]].agg(["mean", "std"]).round(3))
+if (S.status != "ok").any():
+    display(S[S.status != "ok"][["name", "seed", "status"]])
+ok.to_csv(f"{RES}/summary.csv", index=False)
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+for r in ok.itertuples():
+    log = pd.read_csv(f"{RES}/{r.run_id}/log.csv")
+    axes[0].plot(log.epoch, log.val_auc, label=f"{r.name} s{r.seed}")
+    axes[1].plot(log.epoch, log.train_loss, label=f"{r.name} s{r.seed}")
+axes[0].set(title="val AUC per epoch", xlabel="epoch"); axes[1].set(title="train loss per epoch", xlabel="epoch")
+axes[0].legend(fontsize=8)
+plt.tight_layout(); plt.savefig(f"{RES}/curves.png", dpi=90); plt.show()
 '''),
         code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not DEBUG:")),
     ],
