@@ -2,7 +2,10 @@
 
 Default: MAE self-supervised weights `facebook/vit-mae-base` (the BreastDCEDL initialisation).
 They are copied into a plain HF `ViTModel`, because `ViTMAEModel` shuffles and masks patches in
-its forward pass. Ablation: supervised `google/vit-base-patch16-224` (ImageNet-21k + 1k).
+its forward pass. Ablations: supervised `google/vit-base-patch16-224` (ImageNet-21k + 1k), and
+`facebook/dinov2-base` (DINOv2 ViT-B/14, self-supervised on LVD-142M; strong frozen features). DINOv2
+has the same module layout (embeddings, encoder.layer, layernorm); at 224 px it gives 16 x 16 patches
+(its position embeddings are interpolated). A CNN alternative lives in `backbones.py`.
 """
 from __future__ import annotations
 
@@ -17,7 +20,9 @@ IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 BACKBONES = {
     "facebook/vit-mae-base": dict(kind="mae", mean=IMAGENET_MEAN, std=IMAGENET_STD),
     "google/vit-base-patch16-224": dict(kind="vit", mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)),
+    "facebook/dinov2-base": dict(kind="dinov2", mean=IMAGENET_MEAN, std=IMAGENET_STD),
     "tiny-random": dict(kind="mae", mean=IMAGENET_MEAN, std=IMAGENET_STD),   # tests only
+    "tiny-dinov2": dict(kind="dinov2", mean=IMAGENET_MEAN, std=IMAGENET_STD),   # tests only
 }
 TINY = dict(hidden_size=32, num_hidden_layers=4, num_attention_heads=2, intermediate_size=64)
 
@@ -45,6 +50,11 @@ def load_backbone(name: str, pretrained: bool = True):
         raise ValueError(f"unknown backbone {name}; choose from {list(BACKBONES)}")
     if name == "tiny-random":
         return mae_to_vit(ViTMAEModel(ViTMAEConfig(**TINY, image_size=224, patch_size=16)))
+    if BACKBONES[name]["kind"] == "dinov2":
+        from transformers import Dinov2Config, Dinov2Model
+        if name == "tiny-dinov2":
+            return Dinov2Model(Dinov2Config(**TINY, patch_size=14, image_size=518))
+        return Dinov2Model.from_pretrained(name) if pretrained else Dinov2Model(Dinov2Config())
     if BACKBONES[name]["kind"] == "mae":
         mae = ViTMAEModel.from_pretrained(name) if pretrained else ViTMAEModel(ViTMAEConfig())
         return mae_to_vit(mae)
