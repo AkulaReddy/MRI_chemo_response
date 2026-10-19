@@ -13,19 +13,34 @@ INPUT_SIZE = 224
 
 
 def to_rgb_uint8(pre: np.ndarray, early: np.ndarray, late: np.ndarray,
-                 lo_pct: float = 0.5, hi_pct: float = 99.5, stride: int = 4):
+                 lo_pct: float = 0.5, hi_pct: float = 99.5, stride: int = 4, clip=None):
     """Stack phases as R, G, B; clip jointly at volume percentiles; scale to 0..255 uint8.
 
     Returns (rgb (Z, H, W, 3) uint8, (lo, hi) clip values). Percentiles use every `stride`-th
     voxel of all three phases together, so the relative enhancement between phases is kept.
+    `clip=(lo, hi)` uses those values instead (builder v2 computes them with `tumour_clip`).
     """
     if not (pre.shape == early.shape == late.shape):
         raise ValueError(f"phase shapes differ: {pre.shape} {early.shape} {late.shape}")
     stack = np.stack([pre, early, late], axis=-1).astype(np.float32, copy=False)
-    lo, hi = np.percentile(stack.reshape(-1)[::stride], [lo_pct, hi_pct])
+    if clip is None:
+        lo, hi = np.percentile(stack.reshape(-1)[::stride], [lo_pct, hi_pct])
+    else:
+        lo, hi = clip
     scale = 255.0 / max(float(hi - lo), 1e-6)
     rgb = np.clip((stack - lo) * scale, 0, 255)
     return np.rint(rgb).astype(np.uint8), (float(lo), float(hi))
+
+
+def tumour_clip(vols, box, lo_pct: float = 0.5, hi_pct: float = 99.5, tumour_pct: float = 99.9,
+                stride: int = 4):
+    """Joint (lo, hi) for builder v2: hi is raised to the `tumour_pct` percentile of the tumour box
+    (all phases pooled), so the brightest phase no longer saturates inside the tumour (in v1 the
+    late phase hit 255 there, hiding washout). `box` = (z0, z1, y0, y1, x0, x1), source voxels."""
+    z0, z1, y0, y1, x0, x1 = box
+    lo, hi = np.percentile(np.concatenate([v.reshape(-1)[::stride] for v in vols]), [lo_pct, hi_pct])
+    tumour = np.concatenate([v[z0:z1, y0:y1, x0:x1].reshape(-1) for v in vols])
+    return float(lo), float(max(hi, np.percentile(tumour, tumour_pct)))
 
 
 def crop_origin(center: float, size: int, extent: int) -> int:
