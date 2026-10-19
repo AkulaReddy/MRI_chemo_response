@@ -56,6 +56,15 @@ def dataset(cfg, enc, vitonly, table, caches):
                        min_area_frac=float(d.get("min_area_frac", 0.0)))
 
 
+def _progress(loader, what):
+    """The loader's batches, printing progress 4x so long scoring runs show movement in the Kaggle log."""
+    n, t0 = len(loader), time.time()
+    for b, batch in enumerate(loader):
+        yield batch
+        if (b + 1) % max(n // 4, 1) == 0 or b + 1 == n:
+            print(f"    {what}: batch {b + 1}/{n} ({time.time() - t0:.0f} s)", flush=True)
+
+
 def score_run(run_dir, cohorts=("ispy1", "ispy2", "duke"), splits=("val",), final=False, cache_roots=None,
               dev=None):
     """DataFrame pid, cohort, split, label, prob for the run's checkpoint on the requested patients."""
@@ -87,7 +96,9 @@ def score_run(run_dir, cohorts=("ispy1", "ispy2", "duke"), splits=("val",), fina
         loader = make_loader(ds, {**cfg, "data": {**cfg["data"], "sampler": "random"},
                                   "optim": {**cfg["optim"], "batch_patients": 4}}, False)
         amp = dev.type == "cuda" and cfg["optim"].get("amp", True)
-        pr = predict(model, loader, dev, amp)
+        print(f"[{time.strftime('%H:%M:%S')}] scoring {run_dir.name}: {sp} split, {len(t)} patients "
+              f"({', '.join(cohorts)})", flush=True)
+        pr = predict(model, _progress(loader, sp), dev, amp)
         tt = t.reset_index(drop=True).iloc[pr["index"]]
         frames.append(pd.DataFrame({"pid": tt.pid.values, "cohort": tt.cohort.values, "split": sp,
                                     "label": tt.pCR.values, "prob": sigmoid(pr["logit"])}))

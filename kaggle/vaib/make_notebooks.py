@@ -585,6 +585,24 @@ pd.set_option("display.width", 250, "display.max_columns", 40)
 def budget_left():
     return TIME_BUDGET_H - (time.time() - T0) / 3600
 
+def say(msg):
+    """Timestamped progress line (elapsed and remaining budget), flushed so it shows in the Kaggle log at once."""
+    el = (time.time() - T0) / 3600
+    print(f"[{time.strftime('%H:%M:%S')} | {el:.2f} h elapsed, {budget_left():.2f} h left] {msg}", flush=True)
+
+def run_cmd(cmd):
+    """Run a training subprocess and stream its output line by line into this notebook (subprocess.run alone
+    shows nothing until it ends, and the child's stdout is block-buffered without PYTHONUNBUFFERED)."""
+    print("\n" + " ".join(cmd), flush=True)
+    t = time.time()
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                         env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    for line in p.stdout:
+        print(line, end="", flush=True)
+    if p.wait():
+        raise subprocess.CalledProcessError(p.returncode, cmd)
+    say(f"finished in {(time.time() - t) / 60:.1f} min")
+
 def check_caches(version):
     caches = find_caches(["/kaggle/input", "/kaggle/working"])
     info = {c: json.load(open(f"{d}/cache_meta.json")).get("builder_version", 1) for c, d in caches.items()}
@@ -609,8 +627,7 @@ def train(config, seed, sets=(), label=None, cohorts=None):
     if cohorts: cmd += ["--cohorts", *cohorts]
     if DEBUG: cmd.append("--debug")
     if sets: cmd += ["--set", *sets]
-    print("\n" + " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    run_cmd(cmd)
     d = max(glob.glob("/kaggle/working/runs/*/"), key=os.path.getmtime).rstrip("/")
     if label: _copy(d, label)
     return d, json.load(open(f"{d}/metrics.json"))
@@ -622,8 +639,7 @@ def finetune(config, seed, sets=(), label=None, cohorts=None):
     if cohorts: cmd += ["--cohorts", *cohorts]
     if DEBUG: cmd.append("--debug")
     if sets: cmd += ["--set", *sets]
-    print("\n" + " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    run_cmd(cmd)
     d = max(glob.glob("/kaggle/working/runs/*/"), key=os.path.getmtime).rstrip("/")
     if label: _copy(d, label)
     return d
@@ -942,25 +958,31 @@ def collect(pattern):
     return hits
 
 if RUN_STATS:
+    say(f"POINT 3: collecting val predictions of {len(MODELS)} models from {ROOTS}")
     preds = {}
-    for name, pat in MODELS.items():
+    for i, (name, pat) in enumerate(MODELS.items(), 1):
         hits = collect(pat)
         if not hits:
-            print(f"missing (not run / not attached): {name} [{pat}]"); continue
+            print(f"  [{i}/{len(MODELS)}] missing (not run / not attached): {name} [{pat}]", flush=True); continue
         preds[name] = preds_of([os.path.dirname(h) for h in hits])
-        print(f"{name}: {len(hits)} run(s)")
+        print(f"  [{i}/{len(MODELS)}] {name}: {len(hits)} run(s), {len(preds[name])} val patients", flush=True)
+    say(f"computing AUC / DeLong / bootstrap / 90%-spec operating points for {len(preds)} models ...")
     tab = compare(preds, REFERENCE)
+    say("statistics done")
     tab.to_csv(f"{OUT}/step8_val_statistics.csv", index=False)
     display(tab.round(3))
     print("sens/ppv/npv@90spec: threshold chosen on these val patients (optimistic); the final test uses val thresholds.")
+    say("calibration plots ...")
     al = ev.align(preds)
     fig, ax = plt.subplots(1, 2, figsize=(13, 5))
     ev.plot_reliability(ax[0], {k: (v.label, v.prob) for k, v in al.items() if "B1" in k or "F2" in k or "B0" in k})
     ev.plot_reliability(ax[1], {k: (v.label, v.prob) for k, v in al.items() if "ViT" in k or "B3" in k},
                         "Calibration, image-only models (val)")
     plt.tight_layout(); plt.savefig(f"{OUT}/step8_calibration.png", dpi=110); plt.show()
+    say("AUC within subtypes and cohorts ...")
     st = subtype_wide(preds); st.to_csv(f"{OUT}/step8_val_by_subtype.csv"); print("AUC within subtypes:"); display(st)
     sc = subtype_wide(preds, "cohort"); sc.to_csv(f"{OUT}/step8_val_by_cohort.csv"); print("AUC per cohort:"); display(sc)
+    say(f"POINT 3 done -> {OUT}")
 '''),
     md("## Point 4a: leave-one-cohort-out"),
     code(r'''if RUN_LOCO:
@@ -995,6 +1017,7 @@ if RUN_STATS:
     code(r'''if FINAL_TEST:
     assert FINAL_CONFIRM == "I use the test set once", 'set FINAL_CONFIRM = "I use the test set once"'
     from src.predict_run import score_run
+    say("POINT 4b: FINAL TEST, looking for runs.json and checkpoints ...")
     rj = {}
     for f in glob.glob("/kaggle/input/**/runs.json", recursive=True) + glob.glob("/kaggle/working/results/**/runs.json", recursive=True):
         step = os.path.basename(os.path.dirname(f))
@@ -1006,10 +1029,12 @@ if RUN_STATS:
     b1_val = ev.clinical_preds(train_t, val_t, "b1_lr")
     final["B1 clinical + size (LR)"] = (ev.clinical_preds(train_t, test_t, "b1_lr"),
                                         ev.threshold_at_spec(b1_val.label, b1_val.prob))
+    say(f"B1 done; test set {len(test_t)} patients. Scoring {len(FINAL_MODELS)} models ...")
     for name, key in FINAL_MODELS.items():
         step, k = key.split(":")
         ids = rj.get(step, {}).get(k, [])
         dirs = [all_runs[i] for i in ids if i in all_runs]
+        say(f"{name}: {len(dirs)} checkpoint(s) found for {key}")
         if not dirs:
             print(f"SKIPPED {name}: no checkpoints for {key} (attach the {step} notebook output; "
                   "a model reused from the repo has predictions but no checkpoint)"); continue
@@ -1032,6 +1057,7 @@ if RUN_STATS:
         rows.append(r)
         p.to_csv(f"{fdir}/{name.replace(' ', '_').replace(',', '')}_test_preds.csv", index=False)
     ft = pd.DataFrame(rows); ft.to_csv(f"{fdir}/final_test_statistics.csv", index=False)
+    say(f"POINT 4b done -> {fdir}")
     print(f"TEST SET: {len(ref)} patients, {int(ref.label.sum())} pCR. Thresholds from val (90% spec)."); display(ft.round(3))
     fp = aligned
     st = subtype_wide(fp); st.to_csv(f"{fdir}/final_test_by_subtype.csv"); display(st)
@@ -1060,28 +1086,37 @@ LOCO_OURS = r'''if RUN_LOCO:
         sets = list(LOCO_SETS)
     fsets = bs.get("fusion_overrides", sets)
     rows = []
+    n_jobs, job = len(COH) * len(LOCO_MODELS), 0
+    say(f"POINT 4a: LOCO, {n_jobs} trainings ({', '.join(LOCO_MODELS)}) x held-out {COH}")
     for held in COH:
         others = [c for c in COH if c != held]
+        say(f"=== held-out cohort {held.upper()} (train on {others}) ===")
         tr = patient_table("train", others, cache_dirs=caches)               # same patients as the image models
         sc_t = patient_table(["train", "val"], [held], cache_dirs=caches)
         b1 = ev.clinical_preds(tr, sc_t, "b1_lr")
         r = ev.delong_ci(b1.label, b1.prob)
         rows.append({"model": "B1 clinical + size (LR)", "held_out": held, "n": len(b1), "pcr": int(b1.label.sum()),
                      "auc": r["auc"], "ci_lo": r["ci"][0], "ci_hi": r["ci"][1]})
+        say(f"B1 clinical + size -> {held}: AUC {r['auc']:.3f} ({len(b1)} patients, {int(b1.label.sum())} pCR)")
         for name, cfg in LOCO_MODELS.items():
+            job += 1
             if budget_left() < 0.9:
-                print(f"{name} / {held} skipped: time budget"); continue
+                say(f"[{job}/{n_jobs}] {name} / {held} skipped: time budget"); continue
             label = "step8_loco_" + re.sub(r"[^a-z0-9]+", "_", name.lower()) + f"_{held}"
+            say(f"[{job}/{n_jobs}] training {name} ({cfg}) on {others} ({len(tr)} train patients) ...")
             d = finetune(cfg, LOCO_SEED, fsets if cfg == "vo_fusion" else sets, label, cohorts=others)
             m = json.load(open(f"{d}/metrics.json"))
+            say(f"[{job}/{n_jobs}] {name}: val AUC on {others} {m['val']['auc']:.3f}; scoring held-out {held} ...")
             p = score_run(d, [held], ["train", "val"])
             p.to_csv(f"{OUT}/{label}/heldout_preds.csv", index=False)
             r = ev.delong_ci(p.label, p.prob)
             rows.append({"model": name, "held_out": held, "n": len(p), "pcr": int(p.label.sum()), "auc": r["auc"],
                          "ci_lo": r["ci"][0], "ci_hi": r["ci"][1], "val_auc_training_cohorts": m["val"]["auc"]})
             print(f"{name} trained on {others} -> {held}: AUC {r['auc']:.3f} ({r['ci'][0]:.2f}-{r['ci'][1]:.2f})")
+        pd.DataFrame(rows).to_csv(f"{OUT}/step8_loco.csv", index=False)     # partial table after each cohort
     loco = pd.DataFrame(rows)
     loco.to_csv(f"{OUT}/step8_loco.csv", index=False)
+    say(f"POINT 4a done -> {OUT}/step8_loco.csv")
     display(loco.round(3))
     display(loco.pivot(index="model", columns="held_out", values="auc").round(3))
 '''

@@ -89,7 +89,12 @@ def fit(model, cfg, train_ds, val_ds, val_t, dev, run_dir, log):
         model.train()
         lr_enc = max((opt.param_groups[i]["lr"] for i in enc_groups), default=0.0)   # used this epoch
         t0, n_slices, losses = time.time(), 0, []
-        for batch in tr_loader:
+        try:
+            n_batches = len(tr_loader)
+        except TypeError:
+            n_batches = 0
+        every = max(n_batches // 4, 1) if n_batches else 50   # progress 4x per epoch
+        for b, batch in enumerate(tr_loader):
             batch = to_device(batch, dev)
             batch["images"] = train_transform(batch["images"], mean, std, cfg.get("aug"), gen)
             with torch.autocast(dev.type, dtype=torch.float16, enabled=amp):
@@ -106,6 +111,10 @@ def fit(model, cfg, train_ds, val_ds, val_t, dev, run_dir, log):
             sched.step()
             losses.append(loss.item())
             n_slices += int(batch["valid"].sum())
+            if (b + 1) % every == 0 and b + 1 != n_batches:
+                log(f"  epoch {epoch:2d} batch {b + 1}/{n_batches or '?'} loss {np.mean(losses):.4f} "
+                    f"({(time.time() - t0) / 60:.1f} min)")
+        log(f"  epoch {epoch:2d} trained in {(time.time() - t0) / 60:.1f} min; scoring val ...")
         t_train = time.time() - t0
         _, m, _ = evaluate(model, va_loader, val_t, dev, amp)
         row = {"epoch": epoch, "frozen": epoch < freeze, "train_loss": float(np.mean(losses)), "val_auc": m["auc"],
