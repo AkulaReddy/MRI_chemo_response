@@ -5,11 +5,18 @@
 
 `--raw` may hold the original `.tar.gz` (streamed, never extracted to disk) or already-extracted
 `.nii.gz` files (any depth). Output, per patient `<pid>.npz`:
-    rgb    (S, 240, 240, 3) uint8   tumor slices +-2 margin, cropped around the bbox centre
+    rgb    (S, 240, 240, 3) uint8   tumor slices +-2 margin, centred on the tumour box
     mask   (S, 240, 240) uint8      I-SPY only (Duke has bounding boxes only)
+    area   (S,) int32               tumour-mask pixels per slice (I-SPY only)
     t0, t1                          tumor slices are rgb[t0:t1]
     bbox                            (y0, y1, x0, x1) of the tumor inside the crop
+    spacing                         (z, y, x) mm of the cached voxels
 plus `cache_index.csv` (one QC row per patient), `cache_meta.json` and `summary_grid.png`.
+
+Builder v2 (default): every patient is resampled to `--z-mm` (2.0) x `--xy-mm` (0.7) mm voxels on a
+240 x 240 window centred on the tumour box (zero padding outside the scan), so a 224 input covers
+157 mm in every cohort. The clip ceiling is raised to the tumour's 99.9th percentile so the late
+phase no longer saturates inside the tumour. `--xy-mm 0` reproduces v1 (native pixels, no resampling).
 
 Coordinates: the CSV in-plane box (`sraw/eraw/scol/ecol`, [start, end)) matches the masks. The CSV
 box is in the original `n_xy` image; larger originals (e.g. 512) were cropped to a 256 window centred
@@ -40,10 +47,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from src.data.metadata import COHORTS, load_metadata, parse_name  # noqa: E402
 from src.data.nifti_io import load_volume, mask_bbox  # noqa: E402
-from src.data.rgb_slices import CACHE_SIZE, crop_slices, to_rgb_uint8  # noqa: E402
+from src.data.resample import axis_grid, resample, tumour_z_grid  # noqa: E402
+from src.data.rgb_slices import CACHE_SIZE, crop_slices, to_rgb_uint8, tumour_clip  # noqa: E402
 
-BUILDER_VERSION = 1
+BUILDER_VERSION = 2
 MARGIN = 2
+GRID = {"z_mm": 2.0, "xy_mm": 0.7}   # set from --z-mm / --xy-mm in main(); xy_mm 0 = v1 behaviour
 
 
 # ----------------------------------------------------------------------------- sources
@@ -116,8 +125,9 @@ def resolve_phases(row, available):
 
 
 # ----------------------------------------------------------------------------- per patient
-def process(pid, row, phase_src, mask_src, out_dir):
-    """Returns a QC dict; writes <pid>.npz on success. Runs in a worker process."""
+def process(pid, row, phase_src, mask_src, out_dir, grid=None):
+    """Returns a QC dict; writes <pid>.npz on success. Runs in a worker process.
+    `grid` overrides GRID ({"z_mm", "xy_mm"}); passed explicitly so spawned workers see it."""
     qc = {"pid": pid, "status": "ok", "note": ""}
     try:
         vols = [load_volume(phase_src[k]) for k in row["phases_used"]]
@@ -159,20 +169,55 @@ def process(pid, row, phase_src, mask_src, out_dir):
                 y0, y1, x0, x1, qc["xy_source"] = my0, my1, mx0, mx1, "mask"
         if not (0 <= z0 < z1 <= depth and 0 <= y0 < y1 <= h and 0 <= x0 < x1 <= w):
             raise ValueError(f"bbox z{z0}:{z1} y{y0}:{y1} x{x0}:{x1} outside volume {vols[0].shape}")
-        rgb, (lo, hi) = to_rgb_uint8(*vols)
-        s0, s1 = max(0, z0 - MARGIN), min(depth, z1 + MARGIN)
-        crop, (cy0, cx0) = crop_slices(rgb[s0:s1], (y0 + y1) / 2, (x0 + x1) / 2, CACHE_SIZE)
-        arrays = dict(rgb=crop, t0=z0 - s0, t1=z1 - s0, z_offset=s0,
-                      bbox=np.array([y0 - cy0, y1 - cy0, x0 - cx0, x1 - cx0]),
-                      crop_origin=np.array([cy0, cx0]), clip=np.array([lo, hi], np.float32),
-                      phases=np.array(row["phases_used"]))
-        if mask is not None:
-            m, _ = crop_slices(mask[s0:s1, :, :, None], (y0 + y1) / 2, (x0 + x1) / 2, CACHE_SIZE)
-            arrays["mask"] = (m[..., 0] > 0).astype(np.uint8)
+        grid = {**GRID, **(grid or {})}
+        dz, dxy = float(row["slice_thick"]), float(row["xy_spacing"])
+        if n_xy < h:   # smaller original stored at 256 (rescale rule above): pixels are smaller
+            dxy *= n_xy / h
+            qc["note"] += f"pixel {row['xy_spacing']:.3f} mm assumed upsampled to {dxy:.3f} mm; "
+        qc.update(src_dz=dz, src_dxy=round(dxy, 4))
+        if grid["xy_mm"]:   # v2: fixed physical grid centred on the tumour
+            lo, hi = tumour_clip(vols, (z0, z1, y0, y1, x0, x1))
+            zs, zo, n, t0, t1 = tumour_z_grid(z0, z1, depth, dz, grid["z_mm"], MARGIN)
+            (ys, yo), (xs, xo) = (axis_grid((a + b) / 2, dxy, grid["xy_mm"], CACHE_SIZE)
+                                  for a, b in ((y0, y1), (x0, x1)))
+            shape = (n, CACHE_SIZE, CACHE_SIZE)
+            res = [resample(v, (zs, ys, xs), (zo, yo, xo), shape) for v in vols]
+            crop, _ = to_rgb_uint8(*res, clip=(lo, hi))
+
+            def out_edge(e, s, o):   # source edge coordinate -> output edge coordinate
+                return (e - 0.5 - o) / s + 0.5
+            by0, by1, bx0, bx1 = (int(np.clip(f(out_edge(e, s, o)), 0, CACHE_SIZE)) for e, s, o, f in
+                                  ((y0, ys, yo, np.floor), (y1, ys, yo, np.ceil),
+                                   (x0, xs, xo, np.floor), (x1, xs, xo, np.ceil)))
+            arrays = dict(rgb=crop, t0=t0, t1=t1, z_offset=zo, bbox=np.array([by0, by1, bx0, bx1]),
+                          crop_origin=np.array([yo, xo]), clip=np.array([lo, hi], np.float32),
+                          phases=np.array(row["phases_used"]),
+                          spacing=np.array([grid["z_mm"], grid["xy_mm"], grid["xy_mm"]], np.float32))
+            if mask is not None:
+                m = resample(mask.astype(np.float32), (zs, ys, xs), (zo, yo, xo), shape, antialias=False)
+                arrays["mask"] = (m >= 0.5).astype(np.uint8)
+                arrays["area"] = arrays["mask"].sum((1, 2)).astype(np.int32)
+            box = crop[t0:t1, by0:by1, bx0:bx1]
+            qc.update(sat_frac=round(float((box == 255).any(-1).mean()), 4) if box.size else None,
+                      fov224_mm=round(224 * grid["xy_mm"], 1))
+            cy0, cx0 = round(yo, 2), round(xo, 2)
+        else:               # v1: native pixels, window shifted inward, joint volume percentiles
+            rgb, (lo, hi) = to_rgb_uint8(*vols)
+            s0, s1 = max(0, z0 - MARGIN), min(depth, z1 + MARGIN)
+            crop, (cy0, cx0) = crop_slices(rgb[s0:s1], (y0 + y1) / 2, (x0 + x1) / 2, CACHE_SIZE)
+            t0, t1 = z0 - s0, z1 - s0
+            arrays = dict(rgb=crop, t0=t0, t1=t1, z_offset=s0,
+                          bbox=np.array([y0 - cy0, y1 - cy0, x0 - cx0, x1 - cx0]),
+                          crop_origin=np.array([cy0, cx0]), clip=np.array([lo, hi], np.float32),
+                          phases=np.array(row["phases_used"]),
+                          spacing=np.array([dz, dxy, dxy], np.float32))
+            if mask is not None:
+                m, _ = crop_slices(mask[s0:s1, :, :, None], (y0 + y1) / 2, (x0 + x1) / 2, CACHE_SIZE)
+                arrays["mask"] = (m[..., 0] > 0).astype(np.uint8)
         np.savez_compressed(Path(out_dir) / f"{pid}.npz", **arrays)
-        qc.update(n_slices=int(crop.shape[0]), t0=z0 - s0, t1=z1 - s0, z0=z0, z1=z1,
+        qc.update(n_slices=int(crop.shape[0]), t0=t0, t1=t1, z0=z0, z1=z1,
                   clip_lo=round(lo, 2), clip_hi=round(hi, 2), crop_y0=cy0, crop_x0=cx0,
-                  has_mask=mask is not None, tumor_mean=float(crop[z0 - s0:z1 - s0].mean()))
+                  has_mask=mask is not None, tumor_mean=float(crop[t0:t1].mean()))
     except Exception as e:   # recorded, not fatal: one bad patient must not stop the build
         qc.update(status="error", note=qc["note"] + f"{type(e).__name__}: {e}")
     return qc
@@ -224,11 +269,15 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="first N patients only (debug)")
     ap.add_argument("--pids", nargs="*", default=None)
     ap.add_argument("--workers", type=int, default=min(4, os.cpu_count() or 1))
+    ap.add_argument("--z-mm", type=float, default=GRID["z_mm"], help="slice spacing of the cache (mm)")
+    ap.add_argument("--xy-mm", type=float, default=GRID["xy_mm"],
+                    help="in-plane pixel size of the cache (mm); 0 = native pixels (builder v1)")
     ap.add_argument("--max-buffer-gb", type=float, default=4.0,
                     help="phase bytes held in RAM while waiting for a patient's other phases")
     a = ap.parse_args()
 
     t_start = time.time()
+    grid = {"z_mm": a.z_mm, "xy_mm": a.xy_mm}
     ds = COHORTS[a.cohort]
     meta = load_metadata(a.metadata) if a.metadata else load_metadata()
     meta = meta[meta.dataset == ds]
@@ -256,7 +305,8 @@ def main():
             qc_rows.append({"pid": pid, "status": "error", "note": note})
             continue
         rows[pid] = {**{c: r[c] for c in ("n_z", "n_xy", "sraw", "eraw", "scol", "ecol",
-                                          "mask_start", "mask_end", "pre", "post_early", "post_late")},
+                                          "mask_start", "mask_end", "pre", "post_early", "post_late",
+                                          "slice_thick", "xy_spacing")},
                      "phases_used": used, "phase_note": note}
         needed[pid] = set(used)
 
@@ -297,7 +347,7 @@ def main():
                 buf_bytes -= sum(len(v) for v in got.values() if isinstance(v, bytes))
                 while len(futs) >= 2 * a.workers:
                     drain(block=True)
-                futs[ex.submit(process, pid, rows[pid], got, masks.get(pid), a.out)] = pid
+                futs[ex.submit(process, pid, rows[pid], got, masks.get(pid), a.out, grid)] = pid
             drain(block=False)
         while futs:
             drain(block=True)
@@ -308,7 +358,8 @@ def main():
     index.insert(1, "cohort", a.cohort)
     index.to_csv(a.out / "cache_index.csv", index=False)
     counts = index.status.value_counts().to_dict()
-    info = {"cohort": a.cohort, "builder_version": BUILDER_VERSION, "git": git_commit(),
+    info = {"cohort": a.cohort, "builder_version": BUILDER_VERSION if a.xy_mm else 1, "git": git_commit(),
+            "grid_mm": grid if a.xy_mm else None,
             "raw": str(a.raw), "cache_size": CACHE_SIZE, "margin": MARGIN, "status_counts": counts,
             "z_source": index.get("z_source", pd.Series(dtype=str)).value_counts().to_dict(),
             "xy_source": index.get("xy_source", pd.Series(dtype=str)).value_counts().to_dict(),

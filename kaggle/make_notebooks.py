@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.4"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.5"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -88,19 +88,28 @@ secret `GITHUB_TOKEN` attached (Add-ons -> Secrets)."""),
         params(""), code(SETUP),
     ],
     "01_build_cache.ipynb": [
-        md("""# 01 Build the slice cache (CPU, no GPU needed)
+        md("""# 01 Build the slice caches, all cohorts (CPU, no GPU needed; A runs this)
+Builder v2: every patient resampled to 2.0 mm slices x 0.7 mm pixels, centred on the tumour, clip
+ceiling raised so the late phase doesn't saturate in the tumour (see `scripts/build_cache.py`).
 1. Session options: Accelerator **None**, Internet **ON**, secret `GITHUB_TOKEN` attached.
-2. **+ Add Input** -> your raw Dataset (`mnj-raw-ispy1`, `mnj-raw-ispy2` or `mnj-raw-duke`).
-3. Set the parameters, then **Save Version -> Save & Run All (Commit)**.
-4. When it finishes: check the QC numbers and the grid below, then **New Dataset** from the output,
-   named `mnj-cache-<cohort>` (Private, shared with the team). Post the status counts in the chat."""),
-        params('''COHORT = "ispy1"       # "ispy1", "ispy2" or "duke"
+2. **+ Add Input** -> all three raw Datasets (`mnj-raw-ispy1`, `mnj-raw-ispy2`, `mnj-raw-duke`;
+   B and C must have shared theirs with you).
+3. Quick check first: `LIMIT = 10`, run interactively, look at the grids. Then `LIMIT = 0` and
+   **Save Version -> Save & Run All (Commit)** (several hours; keeps running with the browser closed).
+4. When it finishes: check the QC tables and grids, then **New Dataset** from the output, named
+   `mnj-cache-v2` (Private, shared with the team). It holds one folder per cohort, `cache_v2_<cohort>`.
+   Training picks the highest builder version automatically if old caches are attached too."""),
+        params('''COHORTS = ["ispy1", "ispy2", "duke"]
 LIMIT = 0               # 0 = all patients; 10 for a quick check
-RAW = ""                # leave "" to find the mnj-raw-<cohort> input automatically
+WORKERS = 4
+RAW = {}                # {cohort: path} to override the automatic search for mnj-raw-<cohort>
 '''),
         code(SETUP),
-        code(r'''if not RAW:   # Kaggle may unpack the .tar.gz into a folder; either form works
-    want = f"BreastDCEDL_{COHORT.upper()}_min_crop"
+        code(r'''import time
+
+def find_raw(cohort):
+    """Kaggle may unpack the .tar.gz into a folder; either form works."""
+    want = f"BreastDCEDL_{cohort.upper()}_min_crop"
     hits = []
     for root, dirs, files in os.walk("/kaggle/input", followlinks=True):
         if root.count("/") > 7:
@@ -109,35 +118,59 @@ RAW = ""                # leave "" to find the mnj-raw-<cohort> input automatica
         hits += [os.path.join(root, n) for n in dirs + files if n.startswith(want)]
         dirs[:] = [d for d in dirs if not d.startswith("BreastDCEDL_")]
     if not hits:
-        for root, dirs, files in os.walk("/kaggle/input", followlinks=True):
-            print(root, dirs[:5], files[:5])
-            if root.count("/") > 5:
-                dirs[:] = []
-    assert hits, f"no {want} folder or .tar.gz under /kaggle/input: attach mnj-raw-{COHORT} or set RAW"
-    RAW = hits[0] if os.path.isdir(hits[0]) else os.path.dirname(hits[0])
-OUT = f"/kaggle/working/cache_{COHORT}"
-print("raw:", RAW, os.listdir(RAW))
-cmd = [sys.executable, "scripts/build_cache.py", "--cohort", COHORT, "--raw", RAW, "--out", OUT, "--workers", "4"]
-if LIMIT:
-    cmd += ["--limit", str(LIMIT)]
-subprocess.run(cmd, check=True)
+        return None
+    return hits[0] if os.path.isdir(hits[0]) else os.path.dirname(hits[0])
+
+raws = {c: RAW.get(c) or find_raw(c) for c in COHORTS}
+print("raw inputs:", raws)
+if not all(raws.values()):
+    for root, dirs, files in os.walk("/kaggle/input", followlinks=True):
+        print(root, dirs[:5], files[:5])
+        if root.count("/") > 5:
+            dirs[:] = []
+    raise SystemExit(f"missing raw input for {[c for c, r in raws.items() if not r]}: attach mnj-raw-<cohort>")
+
+OUTS, status = {}, {}
+for c in COHORTS:   # one cohort at a time; a failed cohort is reported, the others still build
+    OUTS[c] = f"/kaggle/working/cache_v2_{c}"
+    cmd = [sys.executable, "scripts/build_cache.py", "--cohort", c, "--raw", raws[c], "--out", OUTS[c],
+           "--workers", str(WORKERS)] + (["--limit", str(LIMIT)] if LIMIT else [])
+    t = time.time()
+    print(f"\n===== {c}: {' '.join(cmd)}", flush=True)
+    status[c] = subprocess.run(cmd).returncode
+    print(f"===== {c}: exit {status[c]}, {(time.time() - t) / 60:.1f} min", flush=True)
+print("\nexit codes:", status)
 '''),
         code(r'''import pandas as pd
 from IPython.display import Image, display
-idx = pd.read_csv(f"{OUT}/cache_index.csv")
-print(json.load(open(f"{OUT}/cache_meta.json")))
-print(idx.status.value_counts())
-if "z_source" in idx:
-    print(idx.z_source.value_counts(dropna=False))
-if "xy_source" in idx:
-    print(idx.xy_source.value_counts(dropna=False))
-    sc = idx[idx.xy_source != "csv"]
-    if "mask_csv_iou_yx" in sc and sc.mask_csv_iou_yx.notna().any():
-        print("shifted CSV box vs mask IoU:", sc.mask_csv_iou_yx.describe().round(3).to_dict())
-if "mask_csv_iou_yx" in idx:
-    print("mask vs CSV box IoU:", idx.mask_csv_iou_yx.describe().round(3).to_dict())
-display(idx[idx.status == "error"].head(20))
-display(Image(f"{OUT}/summary_grid.png"))
+
+for c, out in OUTS.items():
+    print(f"\n==================== {c}")
+    if not os.path.exists(f"{out}/cache_index.csv"):
+        print("no cache_index.csv: the build failed, see the log above")
+        continue
+    idx = pd.read_csv(f"{out}/cache_index.csv")
+    meta = json.load(open(f"{out}/cache_meta.json"))
+    print({k: meta.get(k) for k in ("builder_version", "grid_mm", "git", "status_counts", "seconds")})
+    for col in ("z_source", "xy_source"):
+        if col in idx:
+            print(col, idx[col].value_counts(dropna=False).to_dict())
+    if "mask_csv_iou_yx" in idx and idx.mask_csv_iou_yx.notna().any():
+        print("mask vs CSV box IoU:", idx.mask_csv_iou_yx.describe().round(3).to_dict())
+    ok = idx[idx.status == "ok"]
+    show = [k for k in ("src_dxy", "src_dz", "n_slices", "sat_frac") if k in ok]
+    print("per patient (ok rows):")
+    display(ok[show].describe(percentiles=[0.5]).round(3))
+    if "sat_frac" in ok:
+        print(f"tumour-box pixels with a saturated channel: median {ok.sat_frac.median():.4f}, "
+              f"patients over 1%: {(ok.sat_frac > 0.01).sum()} of {len(ok)}")
+    mb = sum(os.path.getsize(os.path.join(out, f)) for f in os.listdir(out)) / 1e6
+    print(f"size on disk: {mb:.0f} MB")
+    err = idx[idx.status == "error"]
+    if len(err):
+        display(err[["pid", "note"]].head(20))
+    if os.path.exists(f"{out}/summary_grid.png"):
+        display(Image(f"{out}/summary_grid.png"))
 '''),
     ],
     "10_train.ipynb": [

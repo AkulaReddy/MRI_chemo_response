@@ -52,19 +52,26 @@ def test_build_from_tar(tmp_path):
             _add(tf, f"x/dce/{r_duke.pid}_duke_dce_aqc_{k}.nii.gz",
                  rng.normal(100, 10, (int(r_duke.n_z), 256, 256)))
         _add(tf, "x/mask/desktop.ini.nii.gz", np.zeros((2, 2, 2)))   # unrelated file: ignored
-    for cohort, n in (("ispy1", 3), ("duke", 1)):
-        out = tmp_path / f"cache_{cohort}"
+    meta = m.set_index("pid")
+    for cohort, n, version in (("ispy1", 3, 2), ("duke", 1, 2), ("ispy1", 3, 1)):
+        out = tmp_path / f"cache_{cohort}_v{version}"
         subprocess.run([sys.executable, str(ROOT / "scripts" / "build_cache.py"), "--cohort", cohort,
-                        "--raw", str(raw), "--out", str(out), "--workers", "1"], check=True, cwd=ROOT)
+                        "--raw", str(raw), "--out", str(out), "--workers", "1"]
+                       + ([] if version == 2 else ["--xy-mm", "0"]), check=True, cwd=ROOT)
         idx = pd.read_csv(out / "cache_index.csv")
         ok = idx[idx.status == "ok"]
         assert len(ok) == n, idx[idx.status != "missing_in_archive"].to_string()
-        assert json.loads((out / "cache_meta.json").read_text())["status_counts"]["ok"] == n
+        info = json.loads((out / "cache_meta.json").read_text())
+        assert info["status_counts"]["ok"] == n and info["builder_version"] == version
         assert (out / "summary_grid.png").exists()
         for pid in ok.pid:
             d = np.load(out / f"{pid}.npz")
             assert d["rgb"].dtype == np.uint8 and d["rgb"].shape[1:] == (240, 240, 3)
             assert 0 <= d["t0"] < d["t1"] <= d["rgb"].shape[0]
+            if version == 2:
+                assert np.allclose(d["spacing"], [2.0, 0.7, 0.7])
+                q = ok.set_index("pid").loc[pid]   # tumour slices span the tumour's depth in 2 mm steps
+                assert d["t1"] - d["t0"] == max(1, round((q.z1 - q.z0) * meta.loc[pid].slice_thick / 2.0))
         if cohort == "ispy1":
             assert sorted(ok.z_source) == ["csv", "mask", "mask"]
             assert sorted(ok.xy_source) == ["csv", "csv", "mask"]
@@ -74,6 +81,16 @@ def test_build_from_tar(tmp_path):
                 y0, y1, x0, x1 = d["bbox"]
                 t = d["rgb"][d["t0"]:d["t1"]].astype(float)
                 assert t[:, y0:y1, x0:x1].mean() > t.mean() + 20
-                assert d["mask"][d["t0"]:d["t1"], y0:y1, x0:x1].all()
+                inside = d["mask"][d["t0"]:d["t1"], y0:y1, x0:x1]
+                if version == 1:
+                    assert inside.all()
+                else:   # resampled: box edges are rounded outwards, the mask may miss a 1-px rim
+                    assert inside.mean() > 0.9 and d["area"][d["t0"]:d["t1"]].min() > 0
+                    r = meta.loc[pid]
+                    w_mm = (r.ecol - r.scol) * r.xy_spacing
+                    assert abs((x1 - x0) * 0.7 - w_mm) <= 2 * 0.7 + 0.01, "box width in mm preserved"
+                    assert abs((x0 + x1) / 2 - 120) <= 1, "tumour centred"
+            if version == 2:
+                assert ok.sat_frac.max() < 0.01, "late phase saturates inside the tumour"
         else:
             assert ok.phase_fallback.notna().all()

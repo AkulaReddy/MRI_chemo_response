@@ -43,13 +43,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # ----------------------------------------------------------------------------- setup
 def find_caches(roots, explicit=()):
-    """{cohort: dir} from `cohort=dir` pairs, else any folder (<= 4 levels deep) with cache_meta.json."""
-    found = {}
+    """{cohort: dir} from `cohort=dir` pairs, else any folder (<= 4 levels deep) with cache_meta.json.
+    If one cohort has several caches (v1 and v2 both attached), the highest builder_version wins."""
+    found, version = {}, {}
     for r in roots:
         for depth in range(5):
             for f in glob.glob(os.path.join(r, *["*"] * depth, "cache_meta.json")):
-                c = json.load(open(f))["cohort"]
-                found.setdefault(c, os.path.dirname(f))
+                meta = json.load(open(f))
+                c, v = meta["cohort"], meta.get("builder_version", 1)
+                if c not in found or v > version[c]:
+                    found[c], version[c] = os.path.dirname(f), v
     for pair in explicit:
         c, d = pair.split("=", 1)
         found[c] = d
