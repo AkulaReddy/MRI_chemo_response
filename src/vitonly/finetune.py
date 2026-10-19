@@ -40,7 +40,7 @@ from src.train import evaluate, git_sha, lr_lambda, make_loader, seed_all, to_de
 
 from .data import SlabBags  # noqa: E402
 from .model import VitOnly  # noqa: E402
-from .slabs import find_caches  # noqa: E402
+from .slabs import cache_label, find_caches  # noqa: E402
 
 
 def datasets(cfg, tables, caches, seed):
@@ -162,7 +162,7 @@ def main(argv=None):
     cohorts = [c for c in (a.cohorts or d["cohorts"]) if c in caches]
     if not cohorts:
         raise SystemExit(f"no caches found for {a.cohorts or d['cohorts']} under {roots}")
-    fmts = {c: json.loads((Path(caches[c]) / "cache_meta.json").read_text()).get("format", "v1") for c in cohorts}
+    fmts = {c: cache_label(caches[c]) for c in cohorts}
     tables = {"train": patient_table(["train"], cohorts, cache_dirs=caches),
               "val": patient_table(["val"], cohorts, cache_dirs=caches)}
     if d.get("limit"):

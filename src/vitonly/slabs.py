@@ -1,8 +1,10 @@
 """Per-patient tumour slabs in raw scanner units, read from either cache format.
 
-v1 (scripts/build_cache.py, `mnj-cache-*`): uint8 RGB, the three phases clipped *jointly* at the volume's
-    0.5/99.5 percentiles (`clip`). We map back to raw units with lo + u8 * (hi - lo) / 255. Anything that was
-    above the 99.5th percentile is lost (saturated at hi), and 8-bit quantisation remains.
+v1 = any uint8 RGB cache from scripts/build_cache.py, both of its builder versions:
+    builder 1 (`mnj-cache-*`): native pixels, phases clipped jointly at the volume's 0.5/99.5 percentiles;
+    builder 2 (main branch, `mnj-cache-v2`): resampled to a fixed 0.7 mm x 2 mm grid, ceiling raised to the
+    tumour's 99.9th percentile (less saturation). Stores `spacing` (z, y, x) mm.
+    We map back to raw units with lo + u8 * (hi - lo) / 255 (`clip`); anything above hi is lost.
 v2 (scripts/build_cache_v2.py, `mnj-cache2-*`): float16 raw / scale, full 256 plane, plus whole-volume
     statistics. Nothing is clipped, so every normalisation in norms.py can be computed exactly.
 
@@ -56,8 +58,11 @@ def load_slab(path: str | Path) -> dict:
         lo, hi = (float(v) for v in d["clip"]) if "clip" in d.files else (0.0, 255.0)
         stats = {"joint_lo": lo, "joint_hi": hi, "joint_hi999": hi, "saturated": True}
         fmt = "v1"
+    sp = d["spacing"] if "spacing" in d.files else None       # v2 raw: (xy, z); uint8 builder 2: (z, y, x)
+    spacing_xy = None if sp is None else float(sp[0] if fmt == "v2" else sp[-1])
+    spacing_z = None if sp is None else float(sp[1] if fmt == "v2" else sp[0])
     slab = {"format": fmt, "x": x, "scale": scale, "t0": t0, "t1": t1, "bbox": bbox, "mask": mask,
-            "stats": stats}
+            "stats": stats, "spacing_xy": spacing_xy, "spacing_z": spacing_z}
     if fmt == "v1":   # references from the slab itself (the whole volume is not in a v1 cache)
         r = raw(slab, slice(None, None, max(1, x.shape[0] // 8)))
         stats["phase_lo"] = np.percentile(r.reshape(-1, 3)[::5], 0.5, axis=0).astype(np.float32)
@@ -74,9 +79,18 @@ def cache_format(cache_dir: str | Path) -> str:
     return meta.get("format", "v1")
 
 
+def cache_label(cache_dir: str | Path) -> str:
+    """'v2 raw' (this branch's raw cache) or 'v1 uint8 builder 1/2' (scripts/build_cache.py)."""
+    meta = json.loads((Path(cache_dir) / "cache_meta.json").read_text())
+    if meta.get("format") == "v2":
+        return "v2 raw"
+    return f"v1 uint8 builder {meta.get('builder_version', 1)}"
+
+
 def find_caches(roots, prefer="v2"):
-    """{cohort: dir}. Any folder (<= 5 levels deep) with cache_meta.json; `prefer` wins when both
-    formats exist for a cohort ('v1' or 'v2'), otherwise whatever is there is used."""
+    """{cohort: dir}. Any folder (<= 5 levels deep) with cache_meta.json. With several caches for a cohort:
+    the `prefer` format ('v2' raw or 'v1' uint8) first, and within uint8 the higher builder version
+    (builder 2 = main's resampled, less-clipped cache)."""
     import glob
     import os
     found = {}
@@ -84,8 +98,8 @@ def find_caches(roots, prefer="v2"):
         for depth in range(6):
             for f in glob.glob(os.path.join(r, *["*"] * depth, "cache_meta.json")):
                 meta = json.load(open(f))
-                found.setdefault(meta["cohort"], {}).setdefault(meta.get("format", "v1"), os.path.dirname(f))
-    out = {}
-    for c, by_fmt in found.items():
-        out[c] = by_fmt.get(prefer) or next(iter(by_fmt.values()))
-    return out
+                rank = (meta.get("format", "v1") == prefer, meta.get("builder_version", 1))
+                c = meta["cohort"]
+                if c not in found or rank > found[c][0]:
+                    found[c] = (rank, os.path.dirname(f))
+    return {c: d for c, (_, d) in found.items()}

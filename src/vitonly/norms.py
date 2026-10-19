@@ -141,6 +141,7 @@ def make_views(slab, idx, norm: str, crop: str, spacing_xy: float, out: int = 24
     """(k, 3, out, out) uint8 views of the chosen slices. Pass `x_raw` (= raw(slab, idx)) to reuse it
     across several normalisations; normalise() never modifies its input."""
     img = normalise(raw(slab, idx) if x_raw is None else x_raw, slab["stats"], norm)
+    spacing_xy = slab.get("spacing_xy") or spacing_xy          # resampled caches store their own pixel size
     side = crop_side(crop, slab["bbox"], spacing_xy, min(img.shape[1:3]), zoom, fov_mm)
     t = crop_resize(img, slab["bbox"], side, out)
     return (t.clamp_(0, 1) * 255).round_().to(torch.uint8)

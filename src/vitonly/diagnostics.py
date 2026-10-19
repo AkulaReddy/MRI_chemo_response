@@ -43,6 +43,7 @@ def tumor_fraction(slab, spacing_xy, crops=CROPS, zoom=1.6, fov_mm=100.0):
     """{crop: fraction of the 224 network input taken by the tumour box's longer side}."""
     y0, y1, x0, x1 = slab["bbox"]
     side_t = max(y1 - y0, x1 - x0)
+    spacing_xy = slab.get("spacing_xy") or spacing_xy
     out = {}
     for c in crops:
         side = crop_side(c, slab["bbox"], spacing_xy, min(slab["x"].shape[1:3]), zoom, fov_mm)
@@ -60,7 +61,7 @@ def gallery(ax_row, slab, spacing_xy, norms, crop="tumor", contour=True):
         ax.axis("off")
         if contour and slab["mask"] is not None:
             from .norms import crop_resize
-            side = crop_side(crop, slab["bbox"], spacing_xy, min(slab["x"].shape[1:3]))
+            side = crop_side(crop, slab["bbox"], slab.get("spacing_xy") or spacing_xy, min(slab["x"].shape[1:3]))
             m = crop_resize(slab["mask"][idx][..., None].astype(np.float32).repeat(3, -1), slab["bbox"], side)
             if m.max() > 0:
                 ax.contour(m[0, 0].numpy(), levels=[0.5], colors="white", linewidths=0.5)

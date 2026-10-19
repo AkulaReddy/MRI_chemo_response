@@ -28,7 +28,8 @@ def kinetic_features(slab, spacing_xy: float, slice_thick: float, pe_thr: float 
     if roi.sum() < 10:                                   # weakly enhancing tumour: top 10% PE of the box
         roi = pe >= np.quantile(pe, 0.9)
     ser = (early - pre)[roi] / np.maximum((late - pre)[roi], 0.05 * r)
-    vox = spacing_xy ** 2 * slice_thick
+    spacing_xy, slice_thick = slab.get("spacing_xy") or spacing_xy, slab.get("spacing_z") or slice_thick
+    vox = spacing_xy ** 2 * slice_thick                     # cached voxel size (resampled caches differ from CSV)
     f = [np.log(roi.sum() * vox + 1), np.log(len(pe) * vox + 1), roi.mean(),
          pe[roi].mean(), np.median(pe[roi]), np.quantile(pe[roi], 0.9), pe[roi].std(),
          np.clip(ser, 0, 5).mean(), np.quantile(np.clip(ser, 0, 5), 0.9),

@@ -37,7 +37,7 @@ from .backbones import Backbone  # noqa: E402
 from .data import MultiViews  # noqa: E402
 from .kinetics import FEATURES, kinetic_features  # noqa: E402
 from .norms import CROPS, NORMS  # noqa: E402
-from .slabs import find_caches, load_slab  # noqa: E402
+from .slabs import cache_label, find_caches, load_slab  # noqa: E402
 
 CS = (1e-3, 3e-3, 1e-2, 3e-2, 1e-1, 3e-1)
 
@@ -101,7 +101,7 @@ def main(argv=None):
     if not cohorts:
         raise SystemExit(f"no caches for {a.cohorts} under {roots}")
     fmts = {c: json.load(open(Path(caches[c]) / "cache_meta.json")).get("format", "v1") for c in cohorts}
-    print("caches:", {c: (caches[c], fmts[c]) for c in cohorts}, flush=True)
+    print("caches:", {c: (caches[c], cache_label(caches[c])) for c in cohorts}, flush=True)
     tr = patient_table(["train"], cohorts, cache_dirs=caches)
     va = patient_table(["val"], cohorts, cache_dirs=caches)
     if a.limit:

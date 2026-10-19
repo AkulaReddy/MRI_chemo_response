@@ -133,9 +133,10 @@ def test_v2_builder_reproduces_v1(tmp_path):
                 _add(tf, f"x/dce/{r.pid}_spy1_vis1_dce_aqc_{k}.nii.gz",
                      rng.normal(100 + 20 * i, 10, (20, 256, 256)) + 300 * mask * (i > 0))
             _add(tf, f"x/mask/{r.pid}_spy1_vis1_mask.nii.gz", mask)
-    for script, out in (("build_cache.py", "v1"), ("build_cache_v2.py", "v2")):
+    for script, out, extra in (("build_cache.py", "v1", ["--xy-mm", "0"]), ("build_cache_v2.py", "v2", []),
+                               ("build_cache.py", "b2", [])):          # b2: main's resampled builder 2
         subprocess.run([sys.executable, str(ROOT / "scripts" / script), "--cohort", "ispy1", "--raw", str(raw_dir),
-                        "--out", str(tmp_path / out), "--workers", "1"], check=True, cwd=ROOT)
+                        "--out", str(tmp_path / out), "--workers", "1", *extra], check=True, cwd=ROOT)
     meta2 = json.loads((tmp_path / "v2" / "cache_meta.json").read_text())
     assert meta2["format"] == "v2" and meta2["status_counts"]["ok"] == 2
     idx = pd.read_csv(tmp_path / "v2" / "cache_index.csv")
@@ -150,6 +151,17 @@ def test_v2_builder_reproduces_v1(tmp_path):
         img = normalise(raw(s2), s2["stats"], "joint_pct")[:, dy:dy + 240, dx:dx + 240]
         assert np.abs(np.rint(img * 255) - v1["rgb"]).max() <= 1
         assert s2["t0"] == int(v1["t0"]) and s2["t1"] == int(v1["t1"])
+        b2 = load_slab(tmp_path / "b2" / f"{r.pid}.npz")          # builder 2: read as uint8, own spacing
+        assert b2["format"] == "v1" and b2["spacing_xy"] == pytest.approx(0.7) and b2["spacing_z"] == 2.0
+        assert make_views(b2, np.array([b2["t0"]]), "kinetic", "mm", 99.0).shape == (1, 3, 240, 240)
+        from src.vitonly.kinetics import kinetic_features
+        assert np.isfinite(kinetic_features(b2, 99.0, 99.0)).all()      # CSV spacing ignored for b2
+    from src.vitonly.slabs import cache_label, find_caches
+    for c in ("v1", "v2", "b2"):
+        json.loads((tmp_path / c / "cache_meta.json").read_text())
+    assert cache_label(tmp_path / "b2") == "v1 uint8 builder 2" and cache_label(tmp_path / "v2") == "v2 raw"
+    assert find_caches([str(tmp_path)], "v2")["ispy1"] == str(tmp_path / "v2")
+    assert find_caches([str(tmp_path)], "v1")["ispy1"] == str(tmp_path / "b2")   # builder 2 beats builder 1
 
 
 def test_probe_end_to_end(v2_cache, tmp_path):

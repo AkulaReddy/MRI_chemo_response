@@ -39,6 +39,16 @@ Every notebook needs **Internet ON** (Session options; requires a phone-verified
 
 In every step-2-5 notebook set `PERSON` ("A", "B" or "C", your role in the team) in the first cell.
 
+## Which cache to attach in steps 3-5 (after merging main, 2026-10-19)
+Three kinds of cache now exist. The notebooks take the best one attached for each cohort:
+1. **`mnj-cache2-<cohort>`** (this branch, step 2): raw float16, nothing clipped. Preferred.
+2. **`mnj-cache-v2`** (main, `kaggle/01_build_cache.ipynb`): uint8, resampled to 0.7 mm x 2 mm, tumour clip
+   ceiling raised. Much less saturation than builder 1. The code reads its stored 0.7 mm spacing.
+3. **`mnj-cache-ispy1/-ispy2/-duke`** (builder 1): uint8, native pixels, tumour often clipped.
+
+Attaching a better one alongside an older one is safe: the better one wins (printed as `v2 raw`,
+`v1 uint8 builder 2` or `v1 uint8 builder 1`).
+
 ## Order and timing
 1. **step1a, 1b, 1c** as three separate notebooks, in parallel; nothing to edit: ~30 min (I-SPY1), ~2-4 h (I-SPY2), ~1.5-3 h (Duke). Check that the log ends with
    `ALL MD5 OK`, then New Dataset from the Output.
