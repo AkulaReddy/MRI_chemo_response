@@ -241,16 +241,19 @@ CI above 0, and confirm it with more seeds before adopting it. Never tune on the
         params('''CONFIG = "b3_vit"
 SEEDS = [0]                       # add seeds (e.g. [0, 1, 2]) to confirm a winner
 RUNS = {                          # name: overrides; the FIRST entry is the baseline
+    # B3 on v2 learns but overfits (train AUC 0.87, val 0.56): every entry tests one way to reduce that
     "base":         ["optim.patience=15"],
-    "min_area_0.1": ["optim.patience=15", "data.min_area_frac=0.1"],
-    "all_blocks":   ["optim.patience=15", "model.train_blocks=all", "optim.lr_backbone=1.0e-4"],
-    "lr_bb_1e-4":   ["optim.patience=15", "optim.lr_backbone=1.0e-4"],
-    "k_train_16":   ["optim.patience=15", "data.k_train=16"],
+    "frozen":       ["optim.patience=15", "model.train_blocks=0"],             # linear probe on frozen MAE features
+    "blocks_2":     ["optim.patience=15", "model.train_blocks=2"],             # fewer trainable blocks (default 4)
+    "min_area_0.1": ["optim.patience=15", "data.min_area_frac=0.1"],           # skip near-empty tumour slices
+    "strong_aug":   ["optim.patience=15", "aug.rotate_deg=30", "aug.intensity=0.2", "aug.scale=[0.8, 1.2]"],
+    "dropout_0.5":  ["optim.patience=15", "model.dropout=0.5", "optim.weight_decay=0.1"],
+    "supervised":   ["optim.patience=15", "model.backbone=google/vit-base-patch16-224"],  # ImageNet-supervised ViT
 }
 CACHE_VERSION = 2
 DEBUG = False
 TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
-KEEP_CHECKPOINTS = False          # best.pt is ~350 MB per run; False deletes it after the run
+KEEP_CHECKPOINTS = True           # best.pt is ~350 MB per run (7 runs ~2.5 GB of the 20 GB output)
 PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
 '''),
         code(SETUP),
