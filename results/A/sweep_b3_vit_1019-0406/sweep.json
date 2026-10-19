@@ -1,0 +1,40 @@
+{
+  "config": "b3_vit",
+  "seeds": [
+    0
+  ],
+  "runs": {
+    "base": [
+      "optim.patience=15"
+    ],
+    "frozen": [
+      "optim.patience=15",
+      "model.train_blocks=0"
+    ],
+    "blocks_2": [
+      "optim.patience=15",
+      "model.train_blocks=2"
+    ],
+    "min_area_0.1": [
+      "optim.patience=15",
+      "data.min_area_frac=0.1"
+    ],
+    "strong_aug": [
+      "optim.patience=15",
+      "aug.rotate_deg=30",
+      "aug.intensity=0.2",
+      "aug.scale=[0.8, 1.2]"
+    ],
+    "dropout_0.5": [
+      "optim.patience=15",
+      "model.dropout=0.5",
+      "optim.weight_decay=0.1"
+    ],
+    "supervised": [
+      "optim.patience=15",
+      "model.backbone=google/vit-base-patch16-224"
+    ]
+  },
+  "git_tag": "d1.7",
+  "debug": false
+}
