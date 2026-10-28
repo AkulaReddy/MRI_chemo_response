@@ -12,6 +12,22 @@ import torch.nn as nn
 from .pooling import GatedAttentionMIL, masked_mean
 from .backbones import build_encoder
 
+RE_MAX = 3.0      # relative enhancement 0..300% is mapped to 0..1 (larger values are clipped)
+RE_FLOOR = 0.05   # floor of the pre-contrast denominator, in units of the patient's clip range
+
+
+def enhancement_maps(x01: torch.Tensor, pre_offset: torch.Tensor) -> torch.Tensor:
+    """(N, 3, H, W) cache values in 0..1 (R/G/B = pre/early/late) -> (N, 3, H, W) in 0..1:
+    early (anatomy, per-patient scale), (early - pre) / pre and (late - pre) / pre.
+
+    The ratios use raw-proportional intensities (cache value + `pre_offset`, see datasets.pre_offset),
+    so they cancel the scanner's overall gain: the same tissue gives the same value on any scanner.
+    Dark pre-contrast voxels (air, suppressed fat) are floored at RE_FLOOR to keep the ratio finite."""
+    pre = x01[:, 0:1]
+    den = (pre + pre_offset.view(-1, 1, 1, 1)).clamp_min(RE_FLOOR)
+    rel = ((x01[:, 1:3] - pre) / den).clamp(0, RE_MAX) / RE_MAX
+    return torch.cat([x01[:, 1:2], rel], 1)
+
 
 class FusionBlock(nn.Module):
     """Pre-norm transformer layer that also returns its (head-averaged) attention weights."""
@@ -67,9 +83,10 @@ class PCRModel(nn.Module):
         assert not (self.agg == "mean_logit" and self.kind != "image_only"), "mean_logit is for image_only"
         self.encoder = build_encoder(m)
         # which DCE phases the encoder sees: "rgb" = pre/early/late as R/G/B (default); "early" = the early
-        # post-contrast phase copied into all 3 channels (= a 1-channel input with the RGB filters summed)
+        # post-contrast phase copied into all 3 channels (= a 1-channel input with the RGB filters summed);
+        # "enhancement" = early, (early - pre)/pre, (late - pre)/pre (relative-enhancement maps)
         self.input_phases = m.get("input_phases", "rgb")
-        assert self.input_phases in ("rgb", "early"), self.input_phases
+        assert self.input_phases in ("rgb", "early", "enhancement"), self.input_phases
         D, d, p = self.encoder.dim, m.get("d_model", 256), m.get("dropout", 0.2)
         self.drop = nn.Dropout(p)
         if self.agg == "mil":
@@ -108,11 +125,15 @@ class PCRModel(nn.Module):
         groups.append({"params": [p for p in rest if p.ndim < 2], "lr": lr_head, "weight_decay": 0.0})
         return [g for g in groups if g["params"]]
 
-    def encode(self, images, valid, output_attentions=False):
+    def encode(self, images, valid, output_attentions=False, pre_offset=None):
         b, k = images.shape[:2]
         flat = images.flatten(0, 1)
         if self.input_phases == "early":
             flat = flat[:, 1:2].expand(-1, 3, -1, -1)
+        elif self.input_phases == "enhancement":   # undo the normalisation, compute the maps, redo it
+            mean, std = (flat.new_tensor(v).view(1, 3, 1, 1) for v in (self.encoder.mean, self.encoder.std))
+            off = (pre_offset if pre_offset is not None else flat.new_zeros(b)).to(flat.dtype)
+            flat = (enhancement_maps(flat * std + mean, off.repeat_interleave(k)) - mean) / std
         sel = valid.flatten()
         out = self.encoder(flat[sel], output_attentions=output_attentions)   # only real slices
         cls = out["cls"].new_zeros((b * k, out["cls"].shape[-1]))
@@ -121,7 +142,7 @@ class PCRModel(nn.Module):
 
     def forward(self, batch, output_attentions=False):
         valid = batch["valid"]
-        h, enc_out = self.encode(batch["images"], valid, output_attentions)   # (B, K, D)
+        h, enc_out = self.encode(batch["images"], valid, output_attentions, batch.get("pre_offset"))  # (B, K, D)
         res = {"img_emb": masked_mean(h, valid)}
         if output_attentions:
             res["vit_attentions"] = enc_out["attentions"]

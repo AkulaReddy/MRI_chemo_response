@@ -53,11 +53,12 @@ def test_build_from_tar(tmp_path):
                  rng.normal(100, 10, (int(r_duke.n_z), 256, 256)))
         _add(tf, "x/mask/desktop.ini.nii.gz", np.zeros((2, 2, 2)))   # unrelated file: ignored
     meta = m.set_index("pid")
-    for cohort, n, version in (("ispy1", 3, 2), ("duke", 1, 2), ("ispy1", 3, 1)):
+    flags = {1: ["--xy-mm", "0"], 2: [], 3: ["--z-mm", "0"]}
+    for cohort, n, version in (("ispy1", 3, 2), ("duke", 1, 2), ("ispy1", 3, 1), ("ispy1", 3, 3)):
         out = tmp_path / f"cache_{cohort}_v{version}"
         subprocess.run([sys.executable, str(ROOT / "scripts" / "build_cache.py"), "--cohort", cohort,
                         "--raw", str(raw), "--out", str(out), "--workers", "1"]
-                       + ([] if version == 2 else ["--xy-mm", "0"]), check=True, cwd=ROOT)
+                       + flags[version], check=True, cwd=ROOT)
         idx = pd.read_csv(out / "cache_index.csv")
         ok = idx[idx.status == "ok"]
         assert len(ok) == n, idx[idx.status != "missing_in_archive"].to_string()
@@ -72,6 +73,10 @@ def test_build_from_tar(tmp_path):
                 assert np.allclose(d["spacing"], [2.0, 0.7, 0.7])
                 q = ok.set_index("pid").loc[pid]   # tumour slices span the tumour's depth in 2 mm steps
                 assert d["t1"] - d["t0"] == max(1, round((q.z1 - q.z0) * meta.loc[pid].slice_thick / 2.0))
+            if version == 3:   # native slices: one cache slice per source slice, at the source spacing
+                q = ok.set_index("pid").loc[pid]
+                assert np.allclose(d["spacing"], [meta.loc[pid].slice_thick, 0.7, 0.7])
+                assert d["t1"] - d["t0"] == q.z1 - q.z0 and d["z_offset"] == q.z0 - d["t0"]
         if cohort == "ispy1":
             assert sorted(ok.z_source) == ["csv", "mask", "mask"]
             assert sorted(ok.xy_source) == ["csv", "csv", "mask"]
@@ -90,7 +95,7 @@ def test_build_from_tar(tmp_path):
                     w_mm = (r.ecol - r.scol) * r.xy_spacing
                     assert abs((x1 - x0) * 0.7 - w_mm) <= 2 * 0.7 + 0.01, "box width in mm preserved"
                     assert abs((x0 + x1) / 2 - 120) <= 1, "tumour centred"
-            if version == 2:
+            if version >= 2:
                 assert ok.sat_frac.max() < 0.01, "late phase saturates inside the tumour"
         else:
             assert ok.phase_fallback.notna().all()

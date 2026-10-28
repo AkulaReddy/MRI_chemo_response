@@ -86,3 +86,31 @@ def test_train_on_ispy_only_with_drop_path(synthetic_cache, tmp_path):
                 "model.input_phases=early", "model.drop_path=0.2", "model.dropout=0.5", "data.cohorts=[ispy1]"])
     m = json.loads((run / "metrics.json").read_text())
     assert m["cohorts"] == ["ispy1"] and m["n_val"] == 8 and set(m["caches"]) == {"ispy1"}
+
+
+def test_enhancement_maps_recover_relative_enhancement_and_cancel_gain():
+    from src.data.datasets import pre_offset
+    from src.data.rgb_slices import to_rgb_uint8
+    from src.models.fusion import RE_MAX, enhancement_maps
+    pre = torch.tensor([200.0, 400.0, 300.0, 10.0]).view(1, 1, 4)
+    early, late = pre * torch.tensor([1.5, 2.0, 1.0, 1.0]), pre * torch.tensor([1.2, 2.5, 0.9, 1.0])
+    out = []
+    for gain in (1.0, 3.0):                       # the same tissue on a scanner with 3x the signal
+        vols = [(v * gain).numpy() for v in (pre, early, late)]
+        rgb, clip = to_rgb_uint8(*vols, clip=(5.0 * gain, 1000.0 * gain))
+        x01 = torch.from_numpy(rgb).float().div(255).permute(0, 3, 1, 2)             # (1, 3, 1, 4)
+        out.append(enhancement_maps(x01, torch.tensor([pre_offset(clip)])))
+    want_early = (early - pre) / pre
+    for o in out:
+        got = o[0, 1, 0] * RE_MAX
+        assert torch.allclose(got[:3], want_early[0, 0, :3].clamp(0, RE_MAX), atol=0.03)   # uint8 rounding
+        assert abs(float(o[0, 2, 0, 2])) < 1e-6                                      # washout below pre: 0
+    assert torch.allclose(out[0][:, 1:], out[1][:, 1:], atol=0.02)                    # gain cancels
+
+
+def test_train_with_enhancement_input(synthetic_cache, tmp_path):
+    caches = [f"{c}={d}" for c, d in synthetic_cache.items()]
+    run = main(["--config", "b3_vit", "--cache", *caches, "--cache-root", str(tmp_path / "none"),
+                "--out", str(tmp_path / "runs"), *COMMON, "model.input_phases=enhancement"])
+    m = json.loads((run / "metrics.json").read_text())
+    assert m["n_val"] == 16 and 0 <= m["val"]["auc"] <= 1
