@@ -13,6 +13,15 @@ Every normalisation maps raw (k, H, W, 3) = (pre, early, late) to float [0, 1] (
     kinetic      R = pre (log-relative), G = percent enhancement PE = (early - pre) / pre (/3),
                  B = signal enhancement ratio SER = (early - pre) / (late - pre) (/2, only where it enhances)
     early3       early phase only, copied to R, G, B (does the multi-phase RGB help at all?)
+Per-slice normalisations (professor's suggestion, 2026-10-28: normalise each slice on its own, not the volume).
+Every statistic comes from that one 2D slice (whole plane), never from the rest of the volume. The first three
+use ONE window per slice shared by its 3 phases, so the tumour's enhancement (early vs pre) survives; each is the
+per-slice twin of a volume method above, so the two can be compared directly:
+    slice_joint  0.5/99.9 pct of the slice's pre+early+late values                 (twin: joint_wide)
+    slice_pre    log(1 + x / r_s), r_s = the slice's mean pre-contrast foreground  (twin: pre_ref)
+    slice_zscore (x - mean_s) / std_s of the slice's pre-contrast foreground       (twin: zscore)
+    slice_phase  each slice AND each phase its own 0.5/99.9 window: the literal reading; destroys the
+                 enhancement like per_phase does, kept only as the ablation        (twin: per_phase)
 
 r = mean pre-contrast foreground intensity of the patient's volume. Measured on the demo archive, enhancing
 I-SPY tumour reaches 4-8 r in the early phase, so linear scales such as x / 3r would saturate the tumour
@@ -31,7 +40,8 @@ import torch.nn.functional as F
 from .slabs import raw
 
 NORMS = ("joint_pct", "joint_wide", "per_phase", "joint_tumor", "pre_ref", "zscore", "sub", "kinetic",
-         "early3")
+         "early3", "slice_joint", "slice_pre", "slice_zscore", "slice_phase")
+SLICE_NORMS = ("slice_joint", "slice_pre", "slice_zscore", "slice_phase")
 CROPS = ("fixed", "tumor", "mm")
 
 
@@ -41,6 +51,26 @@ def _clip01(a):
 
 def _logrel(a, r):
     return np.log1p(np.maximum(a, 0) / r) / np.log1p(12.0)
+
+
+def slice_fg_stats(pre: np.ndarray, fallback: float, min_px: int = 50):
+    """Per-slice (mean, std) of the pre-contrast foreground (pre > 10% of the slice's 99.5th pct), (k,) each.
+    A slice with almost no foreground (edge of the volume) falls back to the volume reference."""
+    mu, sd = np.full(len(pre), fallback, np.float32), np.full(len(pre), fallback, np.float32)
+    for i, p in enumerate(pre):
+        v = p.reshape(-1)
+        fg = v[v > 0.1 * np.percentile(v, 99.5)]
+        if fg.size >= min_px and fg.mean() > 0:
+            mu[i], sd[i] = fg.mean(), max(fg.std(), 1e-3 * fg.mean())
+    return mu, sd
+
+
+def _slice_window(x, lo_pct=0.5, hi_pct=99.9, per_phase=False):
+    """(k, H, W, 3) -> each slice scaled by its own percentile window (shared by the phases unless per_phase)."""
+    axes = (1, 2) if per_phase else (1, 2, 3)
+    lo = np.percentile(x, lo_pct, axis=axes, keepdims=True)
+    hi = np.percentile(x, hi_pct, axis=axes, keepdims=True)
+    return (x - lo) / np.maximum(hi - lo, 1e-6)
 
 
 def normalise(x: np.ndarray, stats: dict, method: str) -> np.ndarray:
@@ -80,6 +110,14 @@ def _normalise(x, stats, method):
         gate = np.clip(wash_in / (0.5 * r), 0, 1)                                  # SER only where it enhances
         return _clip01(np.stack([_logrel(pre, r), np.clip(pe / 3, 0, 1) * signal,
                                  np.clip(ser / 2, 0, 1) * gate], -1))
+    if method in ("slice_joint", "slice_phase"):
+        return _clip01(_slice_window(x, per_phase=method == "slice_phase"))
+    if method in ("slice_pre", "slice_zscore"):
+        mu, sd = slice_fg_stats(pre, r)
+        mu, sd = mu[:, None, None, None], sd[:, None, None, None]
+        if method == "slice_pre":
+            return _clip01(np.log1p(np.maximum(x, 0) / mu) / np.log1p(12.0))
+        return _clip01(((x - mu) / sd + 2) / 12)
     raise ValueError(f"unknown normalisation {method!r}; choose from {NORMS}")
 
 

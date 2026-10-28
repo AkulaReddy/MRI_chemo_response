@@ -78,6 +78,20 @@ Each writes `results/<PERSON>/step6|7|8/` (summary CSVs, prediction files, `runs
 the step 6/7 predictions and checkpoints in the attached notebook outputs (+ Add Input -> Your Work -> Notebooks).
 Run each with `DEBUG = True` first (minutes), then `DEBUG = False` + Save & Run All (Commit).
 
+## Steps 9-10: the professor's suggestions (2026-10-28)
+ComBat harmonisation, 2D / 3D / temporal (per-slice kinetic) features, and per-slice normalisation.
+Background, interpretation and the result tables to fill in: `docs/vaib/RESULTS.md`.
+
+| step | notebook | accelerator | what it does | attach | time |
+|---|---|---|---|---|---|
+| 9 | `step9_features_combat_per_slice.ipynb` | None (CPU) | 2D, 3D, temporal + kinetic16 features (volume vs per-slice intensity reference), each x ComBat (no/yes) x subtype (no/yes), CV + val AUC, paired vs the subtype lookup; ComBat by cohort and by protocol | caches + code | ~30-60 min |
+| 10 | `step10_per_slice_vit_deep_combat.ipynb` | GPU T4 x2 | probe: per-slice norms vs their volume twins (DINOv2, MAE); ComBat + subtype on the ViT features; fine-tuned DINOv2 (2 blocks) per-slice vs volume, 2 seeds, with the epoch 5-15 mean AUC | caches + code (+ step-9 output, optional) | ~4-5 h |
+
+Caches: the best attached one per cohort is used and printed: `mnj-cache2-*` (raw, exact) > Akula's
+`mnj-cache-v2` > `mnj-cache-*`. Both notebooks print a timestamped line at every step (and every 100 patients /
+every configuration), and print a failed patient or run without stopping the rest. Run `DEBUG = True` first.
+Each writes `results/<PERSON>/step9|10/RESULTS_step9|10.md` with the tables ready to paste.
+
 ## Option: download on your laptop instead of step 1
 `python scripts/download_breastdcedl.py` downloads the full release into `datasets/BreastDCEDL/`. It resumes
 and checks md5, and that folder is ignored by git. Then upload it as one Dataset with the Kaggle CLI (see
@@ -89,5 +103,10 @@ more than a day, so step 1 on Kaggle is much faster.
 - step0 and step2: run on real patients from the demo archive.
 - step3-5: run end to end on synthetic caches with tiny models, through the real SETUP cell (code-Dataset route).
 - `python -m pytest -q tests`: 42 passed.
+
+## Checked locally (2026-10-28)
+- steps 9 and 10 executed cell by cell (SETUP / PUSH skipped) on synthetic raw caches of all 3 cohorts, `DEBUG = True`,
+  tiny DINOv2 for step 10.
+- `python -m pytest -q tests`: 74 passed; the 2 ResNet tests from main need torchvision (not installed locally).
 
 Regenerate the notebooks after editing: `python kaggle/vaib/make_notebooks.py`.
