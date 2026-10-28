@@ -34,19 +34,19 @@ def test_min_area_frac_drops_weak_slices(tmp_path, mask):
     area = [0, 5, 100, 400, 1000, 300, 20, 0]               # tumour slices 1..8 of the cache
     t, dirs = _bags(tmp_path, area, mask)
     enc = ClinicalEncoder([]).fit(t)
-    kept = PatientBags(t, dirs, enc, k=4, train=False, min_area_frac=0.1)._load(0)[:, 0, 0, 0]
+    kept = PatientBags(t, dirs, enc, k=4, train=False, min_area_frac=0.1)._load(0)[0][:, 0, 0, 0]
     assert kept.tolist() == [3, 4, 5, 6]                    # area >= 100 (10% of 1000)
-    off = PatientBags(t, dirs, enc, k=4, train=False)._load(0)[:, 0, 0, 0]
+    off = PatientBags(t, dirs, enc, k=4, train=False)._load(0)[0][:, 0, 0, 0]
     assert off.tolist() == list(range(1, 9))                # default: every tumour slice
 
 
 def test_min_area_frac_keeps_duke_and_never_empties(tmp_path):
     t, dirs = _bags(tmp_path, [0, 0, 0])
     enc = ClinicalEncoder([]).fit(t)
-    assert len(PatientBags(t, dirs, enc, k=4, train=False, min_area_frac=0.5)._load(0)) == 1
+    assert len(PatientBags(t, dirs, enc, k=4, train=False, min_area_frac=0.5)._load(0)[0]) == 1
     np.savez(next(tmp_path.glob("*.npz")), rgb=np.zeros((5, 240, 240, 3), np.uint8), t0=1, t1=4,
              bbox=np.array([0, 1, 0, 1]))                    # no area, no mask (Duke)
-    assert len(PatientBags(t, dirs, enc, k=4, train=False, min_area_frac=0.5)._load(0)) == 3
+    assert len(PatientBags(t, dirs, enc, k=4, train=False, min_area_frac=0.5)._load(0)[0]) == 3
 
 
 def test_cache_version_is_enforced_and_recorded(synthetic_cache, tmp_path):

@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.9"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.10"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -98,11 +98,16 @@ ceiling raised so the late phase doesn't saturate in the tumour (see `scripts/bu
    **Save Version -> Save & Run All (Commit)** (several hours; keeps running with the browser closed).
 4. When it finishes: check the QC tables and grids, then **New Dataset** from the output, named
    `mnj-cache-v2` (Private, shared with the team). It holds one folder per cohort, `cache_v2_<cohort>`.
-   Training picks the highest builder version automatically if old caches are attached too."""),
+   Training picks the highest builder version automatically if old caches are attached too.
+
+**Builder v3** (`Z_MM = 0`): same as v2 in-plane (0.7 mm, tumour-centred), but the **native slices are
+kept** (no resampling between slices). Output folders `cache_v3_<cohort>`; name the Dataset `mnj-cache-v3`.
+Notebooks that compare v2 and v3 (`14_v3_enhancement`) choose the cache per run."""),
         params('''COHORTS = ["ispy1", "ispy2", "duke"]
 LIMIT = 0               # 0 = all patients; 10 for a quick check
 WORKERS = 4
 RAW = {}                # {cohort: path} to override the automatic search for mnj-raw-<cohort>
+Z_MM = 2.0              # 2.0 = builder v2 (2 mm slices); 0 = builder v3 (native slices, 0.7 mm in-plane)
 '''),
         code(SETUP),
         code(r'''import time
@@ -132,9 +137,9 @@ if not all(raws.values()):
 
 OUTS, status = {}, {}
 for c in COHORTS:   # one cohort at a time; a failed cohort is reported, the others still build
-    OUTS[c] = f"/kaggle/working/cache_v2_{c}"
+    OUTS[c] = f"/kaggle/working/cache_v{2 if Z_MM else 3}_{c}"
     cmd = [sys.executable, "scripts/build_cache.py", "--cohort", c, "--raw", raws[c], "--out", OUTS[c],
-           "--workers", str(WORKERS)] + (["--limit", str(LIMIT)] if LIMIT else [])
+           "--workers", str(WORKERS), "--z-mm", str(Z_MM)] + (["--limit", str(LIMIT)] if LIMIT else [])
     t = time.time()
     print(f"\n===== {c}: {' '.join(cmd)}", flush=True)
     status[c] = subprocess.run(cmd).returncode
@@ -269,11 +274,23 @@ json.dump({"config": CONFIG, "seeds": SEEDS, "runs": RUNS, "git_tag": GIT_TAG, "
           open(f"{RES}/sweep.json", "w"), indent=2)
 rows, t_start, durations = [], time.time(), []
 
+def run_spec(spec):
+    """A RUNS entry: a list of overrides, or {"set": [overrides], "cache": builder version}."""
+    return (spec, CACHE_VERSION) if isinstance(spec, list) else (spec.get("set", []), spec.get("cache", CACHE_VERSION))
+
+CACHES = {}   # {builder version: {cohort: dir}} of the attached caches; each run is pointed at one version
+for depth in range(6):
+    for f in glob.glob(os.path.join("/kaggle/input", *["*"] * depth, "cache_meta.json")):
+        m = json.load(open(f))
+        CACHES.setdefault(m.get("builder_version", 1), {})[m["cohort"]] = os.path.dirname(f)
+print("attached caches:", {f"v{v}": sorted(d) for v, d in sorted(CACHES.items())})
+
 def finished_run_dir(before):
     new = sorted(set(glob.glob("/kaggle/working/runs/*/")) - before, key=os.path.getmtime)
     return os.path.normpath(new[-1]) if new else None
 
-for name, extra in RUNS.items():
+for name, spec in RUNS.items():
+    extra, version = run_spec(spec)
     for seed in SEEDS:
         used_h = (time.time() - t_start) / 3600
         est_h = (sum(durations) / len(durations) / 3600) if durations else 0
@@ -283,18 +300,21 @@ for name, extra in RUNS.items():
             continue
         cmd = [sys.executable, "-m", "src.train", "--config", CONFIG, "--seed", str(seed), "--mode", "train",
                "--cache-root", "/kaggle/input", "--out", "/kaggle/working/runs", "--results-dir", RES]
-        if CACHE_VERSION is not None:
-            cmd += ["--cache-version", str(CACHE_VERSION)]
+        if version is not None:
+            cmd += ["--cache-version", str(version)]
+            if len(CACHES) > 1 and version in CACHES:   # several versions attached: name this one's folders
+                cmd += ["--cache", *[f"{c}={d}" for c, d in CACHES[version].items()]]
         if DEBUG:
             cmd.append("--debug")
         if extra:
             cmd += ["--set", *extra]
-        print(f"\n===== {name} seed {seed}: {' '.join(extra) or '(defaults)'}", flush=True)
+        print(f"\n===== {name} seed {seed} (cache v{version}): {' '.join(extra) or '(defaults)'}", flush=True)
         before, t = set(glob.glob("/kaggle/working/runs/*/")), time.time()
         rc = subprocess.run(cmd).returncode
         durations.append(time.time() - t)
         run_dir = finished_run_dir(before)
-        row = {"name": name, "seed": seed, "overrides": " ".join(extra), "status": "ok" if rc == 0 else f"exit {rc}",
+        row = {"name": name, "seed": seed, "cache": version, "overrides": " ".join(extra),
+               "status": "ok" if rc == 0 else f"exit {rc}",
                "run_id": os.path.basename(run_dir) if run_dir else None, "minutes": round(durations[-1] / 60, 1)}
         if rc == 0 and run_dir and os.path.exists(f"{run_dir}/metrics.json"):
             m = json.load(open(f"{run_dir}/metrics.json"))
@@ -349,6 +369,29 @@ display(ok[[c for c in cols if c in ok]].sort_values("val_auc", ascending=False)
 if len(SEEDS) > 1:
     print("mean over seeds:")
     display(ok.groupby("name")[["val_auc", "auprc", "ece", "best_epoch"]].agg(["mean", "std"]).round(3))
+    # each setting's seeds averaged into one prediction per patient (less seed noise), then compared
+    # with the baseline's seed average on the same patients
+    avg = {}
+    for n in ok["name"].unique():
+        ps = [preds[(n, s)] for s in ok[ok["name"] == n].seed]
+        common = ps[0].index
+        for q in ps[1:]:
+            common = common.intersection(q.index)
+        avg[n] = pd.DataFrame({"label": ps[0].loc[common, "label"],
+                               "prob": sum(q.loc[common, "prob"] for q in ps) / len(ps)})
+    b = ext if BASELINE else avg.get(base)
+    if b is not None:
+        rows_avg = []
+        for n, p in avg.items():
+            common = b.index.intersection(p.index)
+            d = stats.paired_bootstrap_auc_diff(b.loc[common, "label"], b.loc[common, "prob"], p.loc[common, "prob"])
+            rows_avg.append({"name": n, "seeds": int((ok["name"] == n).sum()),
+                             "auc_seed_avg": round(stats.auc(p.label, p.prob), 4), "vs_base": round(d["diff"], 3),
+                             "vs_base_ci": f"{d['ci'][0]:+.3f} to {d['ci'][1]:+.3f}", "vs_base_p": round(d["p"], 3)})
+        print(f"seed-averaged predictions, paired vs '{base}':")
+        A = pd.DataFrame(rows_avg)
+        display(A)
+        A.to_csv(f"{RES}/summary_seed_avg.csv", index=False)
 if (S.status != "ok").any():
     display(S[S.status != "ok"][["name", "seed", "status"]])
 ok.to_csv(f"{RES}/summary.csv", index=False)
@@ -441,6 +484,110 @@ CACHE_VERSION = 2
 DEBUG = False
 TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
 KEEP_CHECKPOINTS = True           # best.pt ~350 MB per run
+PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
+'''),
+    *NOTEBOOKS["11_sweep.ipynb"][2:],
+]
+
+
+# 02_radiomics: hand-made tumour features from cache v2 + ComBat + subtype baselines (CPU)
+NOTEBOOKS["02_radiomics.ipynb"] = [
+    md("""# 02 Radiomics + ComBat + subtype baselines (CPU, no GPU needed)
+1. **Features** (`scripts/extract_radiomics.py`, `src/radiomics.py`) for every cached patient. They're
+   computed on cache v2 (same 0.7 x 0.7 x 2 mm voxels for everyone), with intensities converted back to
+   raw-proportional units:
+   - **shape:** volume, sphericity, axes, number of parts;
+   - **kinetics:** relative enhancement (early - pre)/pre and (late - pre)/pre; washout / plateau / persistent
+     fractions;
+   - **heterogeneity:** entropy and GLCM texture of the enhancement map;
+   - **peritumoural 5 mm ring:** enhancement just outside the tumour.
+
+   Tumour = the I-SPY mask; for Duke (boxes only), the box voxels enhancing >= 70% (the I-SPY rule).
+2. **Baselines** (`src/baselines/radiomics.py`), fitted on train and scored on val:
+   - `subtype`: HR/HER2 lookup;
+   - `rad`: radiomics, ComBat-harmonised by protocol group (matrix x slice thickness x pixel size, per
+     cohort);
+   - `rad_sub`: `rad` + HR/HER2;
+   - `rad_nocombat`, `rad_sub_nocombat`: the same without ComBat.
+
+   Each model is compared with `subtype` by paired bootstrap.
+
+Session: Accelerator **None**, Internet **ON**, secret `GITHUB_TOKEN`, **+ Add Input** `mnj-cache-v2`.
+`LIMIT = 30` first (a minute), then `LIMIT = 0` and **Save & Run All (Commit)** (about 30-60 min).
+The features CSV is pushed with the results, so A can rerun the baselines locally."""),
+    params('''LIMIT = 0               # patients per cohort; 30 for a quick check
+WORKERS = 4
+CACHE_VERSION = 2
+PUSH_RESULTS = True
+'''),
+    code(SETUP),
+    code(r'''import time
+CONFIG, SEED = "radiomics", "-"     # used in the push commit message
+RES = f"/kaggle/working/results/{PERSON}/radiomics_{time.strftime('%m%d-%H%M')}" + ("_debug" if LIMIT else "")
+os.makedirs(RES, exist_ok=True)
+cmd = [sys.executable, "scripts/extract_radiomics.py", "--cache-root", "/kaggle/input", "--cache-version",
+       str(CACHE_VERSION), "--out", f"{RES}/features.csv", "--workers", str(WORKERS)] + (["--limit", str(LIMIT)] if LIMIT else [])
+print(" ".join(cmd)); subprocess.run(cmd, check=True)
+cmd = [sys.executable, "-m", "src.baselines.radiomics", "--features", f"{RES}/features.csv", "--out", RES]
+print(" ".join(cmd)); subprocess.run(cmd, check=True)
+'''),
+    code(r'''import glob
+import pandas as pd
+from IPython.display import display
+f = pd.read_csv(f"{RES}/features.csv")
+print("mask source per cohort:"); display(f.groupby("cohort").mask_source.value_counts().unstack(fill_value=0))
+from src.radiomics import FEATURES
+print("feature medians per cohort (raw, before ComBat):"); display(f.groupby("cohort")[FEATURES].median().T.round(3))
+rows = []
+for m in sorted(glob.glob(f"{RES}/r_*/metrics.json")):
+    j = json.load(open(m)); v = j["val"]
+    rows.append({"model": j["config"], "val_auc": round(v["auc"], 3), "ci": f"{v['auc_ci'][0]:.3f}-{v['auc_ci'][1]:.3f}",
+                 **{f"auc_{c}": round(x["auc"], 3) for c, x in v["by_cohort"].items()},
+                 "batch_acc_before": j.get("batch_acc_before"), "batch_acc_after": j.get("batch_acc_after"),
+                 "chance": j.get("batch_chance")})
+display(pd.DataFrame(rows))
+'''),
+    code(PUSH.replace("if PUSH_RESULTS:", "if PUSH_RESULTS and not LIMIT:")),
+]
+
+
+# 14_v3_enhancement: cache v2 vs v3 (native slices) and relative-enhancement input, 2 seeds each
+NOTEBOOKS["14_v3_enhancement.ipynb"] = [
+    md("""# 14 Native slices (cache v3) and relative-enhancement input (GPU)
+Same machinery as `11_sweep`. Every run: DINOv2 ViT-B/14, top 2 blocks trained, dropout 0.5, all cohorts.
+Two questions (see `docs/ideas.md`, items 6 and 13):
+1. **Does resampling between slices matter?** v2 = 2 mm slices, v3 = native slices (both 0.7 mm in-plane).
+2. **Does a scanner-independent input help?** `enhancement` = early, (early - pre)/pre, (late - pre)/pre.
+
+Runs (each with seeds 0 and 1); the **first entry is the baseline**:
+- `v2_early`: cache v2, early phase only (the current best setting);
+- `v3_early`: cache v3, early phase only -> effect of native slices;
+- `v2_rgb`: cache v2, raw pre/early/late -> effect of using all three phases;
+- `v2_enh`: cache v2, relative-enhancement maps -> effect of the normalisation, compared with `v2_rgb`;
+- `v3_enh`: cache v3, relative-enhancement maps.
+
+1. Session options: **GPU**, Internet **ON**, secret `GITHUB_TOKEN`.
+2. **+ Add Input**: **both** `mnj-cache-v2` and `mnj-cache-v3` (built with `01_build_cache`, `Z_MM = 0`).
+   Each run is pointed at its cache version; the attached versions are printed first.
+3. `DEBUG = True` first, then `DEBUG = False` and **Save Version -> Save & Run All (Commit)** (about 5.5 h).
+
+Read the **seed-averaged** table: it averages each setting's two seeds before the paired comparison, so it
+is less noisy than the single-seed rows."""),
+    params('''CONFIG = "b3_vit"
+SEEDS = [0, 1]
+P = ["optim.patience=15", "model.backbone=facebook/dinov2-base", "model.train_blocks=2", "model.dropout=0.5"]
+RUNS = {                          # name: {"cache": builder version, "set": overrides}; FIRST = baseline
+    "v2_early": {"cache": 2, "set": P + ["model.input_phases=early"]},
+    "v3_early": {"cache": 3, "set": P + ["model.input_phases=early"]},
+    "v2_rgb":   {"cache": 2, "set": P + ["model.input_phases=rgb"]},
+    "v2_enh":   {"cache": 2, "set": P + ["model.input_phases=enhancement"]},
+    "v3_enh":   {"cache": 3, "set": P + ["model.input_phases=enhancement"]},
+}
+BASELINE = None                   # None = the first entry of RUNS, same seed
+CACHE_VERSION = 2                 # used for entries without a "cache" key
+DEBUG = False
+TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
+KEEP_CHECKPOINTS = False          # 10 runs x ~350 MB; set True only if you will reuse the weights
 PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
 '''),
     *NOTEBOOKS["11_sweep.ipynb"][2:],

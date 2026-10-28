@@ -17,6 +17,8 @@ Builder v2 (default): every patient is resampled to `--z-mm` (2.0) x `--xy-mm` (
 240 x 240 window centred on the tumour box (zero padding outside the scan), so a 224 input covers
 157 mm in every cohort. The clip ceiling is raised to the tumour's 99.9th percentile so the late
 phase no longer saturates inside the tumour. `--xy-mm 0` reproduces v1 (native pixels, no resampling).
+Builder v3 (`--z-mm 0`): as v2 in-plane (0.7 mm, tumour-centred, same clip), but the native slices are
+kept (no resampling between slices), so the number of tumour slices differs between patients.
 
 Coordinates: the CSV in-plane box (`sraw/eraw/scol/ecol`, [start, end)) matches the masks. The CSV
 box is in the original `n_xy` image; larger originals (e.g. 512) were cropped to a 256 window centred
@@ -50,9 +52,13 @@ from src.data.nifti_io import load_volume, mask_bbox  # noqa: E402
 from src.data.resample import axis_grid, resample, tumour_z_grid  # noqa: E402
 from src.data.rgb_slices import CACHE_SIZE, crop_slices, to_rgb_uint8, tumour_clip  # noqa: E402
 
-BUILDER_VERSION = 2
 MARGIN = 2
-GRID = {"z_mm": 2.0, "xy_mm": 0.7}   # set from --z-mm / --xy-mm in main(); xy_mm 0 = v1 behaviour
+GRID = {"z_mm": 2.0, "xy_mm": 0.7}   # set from --z-mm / --xy-mm in main(); xy_mm 0 = v1, z_mm 0 = v3
+
+
+def cache_version(grid) -> int:
+    """1: native pixels and slices; 2: resampled in-plane and between slices; 3: in-plane only."""
+    return 1 if not grid["xy_mm"] else (2 if grid["z_mm"] else 3)
 
 
 # ----------------------------------------------------------------------------- sources
@@ -175,9 +181,10 @@ def process(pid, row, phase_src, mask_src, out_dir, grid=None):
             dxy *= n_xy / h
             qc["note"] += f"pixel {row['xy_spacing']:.3f} mm assumed upsampled to {dxy:.3f} mm; "
         qc.update(src_dz=dz, src_dxy=round(dxy, 4))
-        if grid["xy_mm"]:   # v2: fixed physical grid centred on the tumour
+        if grid["xy_mm"]:   # v2/v3: fixed in-plane grid centred on the tumour
             lo, hi = tumour_clip(vols, (z0, z1, y0, y1, x0, x1))
-            zs, zo, n, t0, t1 = tumour_z_grid(z0, z1, depth, dz, grid["z_mm"], MARGIN)
+            z_mm = grid["z_mm"] or dz   # v3: the source spacing, so z scale 1 = the native slices, unblurred
+            zs, zo, n, t0, t1 = tumour_z_grid(z0, z1, depth, dz, z_mm, MARGIN)
             (ys, yo), (xs, xo) = (axis_grid((a + b) / 2, dxy, grid["xy_mm"], CACHE_SIZE)
                                   for a, b in ((y0, y1), (x0, x1)))
             shape = (n, CACHE_SIZE, CACHE_SIZE)
@@ -192,7 +199,7 @@ def process(pid, row, phase_src, mask_src, out_dir, grid=None):
             arrays = dict(rgb=crop, t0=t0, t1=t1, z_offset=zo, bbox=np.array([by0, by1, bx0, bx1]),
                           crop_origin=np.array([yo, xo]), clip=np.array([lo, hi], np.float32),
                           phases=np.array(row["phases_used"]),
-                          spacing=np.array([grid["z_mm"], grid["xy_mm"], grid["xy_mm"]], np.float32))
+                          spacing=np.array([z_mm, grid["xy_mm"], grid["xy_mm"]], np.float32))
             if mask is not None:
                 m = resample(mask.astype(np.float32), (zs, ys, xs), (zo, yo, xo), shape, antialias=False)
                 arrays["mask"] = (m >= 0.5).astype(np.uint8)
@@ -269,7 +276,8 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="first N patients only (debug)")
     ap.add_argument("--pids", nargs="*", default=None)
     ap.add_argument("--workers", type=int, default=min(4, os.cpu_count() or 1))
-    ap.add_argument("--z-mm", type=float, default=GRID["z_mm"], help="slice spacing of the cache (mm)")
+    ap.add_argument("--z-mm", type=float, default=GRID["z_mm"],
+                    help="slice spacing of the cache (mm); 0 = native slices (builder v3)")
     ap.add_argument("--xy-mm", type=float, default=GRID["xy_mm"],
                     help="in-plane pixel size of the cache (mm); 0 = native pixels (builder v1)")
     ap.add_argument("--max-buffer-gb", type=float, default=4.0,
@@ -358,8 +366,8 @@ def main():
     index.insert(1, "cohort", a.cohort)
     index.to_csv(a.out / "cache_index.csv", index=False)
     counts = index.status.value_counts().to_dict()
-    info = {"cohort": a.cohort, "builder_version": BUILDER_VERSION if a.xy_mm else 1, "git": git_commit(),
-            "grid_mm": grid if a.xy_mm else None,
+    info = {"cohort": a.cohort, "builder_version": cache_version(grid), "git": git_commit(),
+            "grid_mm": {"z_mm": grid["z_mm"] or None, "xy_mm": grid["xy_mm"]} if a.xy_mm else None,
             "raw": str(a.raw), "cache_size": CACHE_SIZE, "margin": MARGIN, "status_counts": counts,
             "z_source": index.get("z_source", pd.Series(dtype=str)).value_counts().to_dict(),
             "xy_source": index.get("xy_source", pd.Series(dtype=str)).value_counts().to_dict(),

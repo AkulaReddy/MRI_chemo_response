@@ -2,6 +2,8 @@
 
 Every model sees a patient as a bag of K slices (training: K random tumor slices; evaluation:
 up to K_eval slices evenly spaced over the tumor, padded with a mask). Labels are patient-level.
+Each item also carries `pre_offset` = lo / (hi - lo) of the patient's clip range, so the model can
+recover intensities proportional to the raw signal (`model.input_phases: enhancement`).
 The test split is refused unless `allow_test=True`, which only scripts/final_eval.py passes (D-006).
 """
 from __future__ import annotations
@@ -36,7 +38,12 @@ class PatientBags(Dataset):
         return len(self.t)
 
     def _load(self, i):
+        """(tumour slices (S, 240, 240, 3) uint8, pre_offset)."""
         d = np.load(self.paths[i])
+        off = pre_offset(d["clip"]) if "clip" in d.files else 0.0
+        return self._slices(d), off
+
+    def _slices(self, d):
         t0, t1 = int(d["t0"]), int(d["t1"])
         n = d["rgb"].shape[0]
         if self.min_area_frac > 0 and ("area" in d.files or "mask" in d.files):
@@ -56,7 +63,7 @@ class PatientBags(Dataset):
         return np.unique(np.linspace(0, s - 1, self.k).round().astype(int))
 
     def __getitem__(self, i):
-        rgb = self._cache[i] if self._cache is not None else self._load(i)
+        rgb, off = self._cache[i] if self._cache is not None else self._load(i)
         idx = self._pick(rgb.shape[0])
         x = np.zeros((self.k,) + rgb.shape[1:], np.uint8)
         x[:len(idx)] = rgb[idx]
@@ -70,6 +77,7 @@ class PatientBags(Dataset):
             "cat": torch.from_numpy(self.clin["cat"][i]),
             "cont": torch.from_numpy(self.clin["cont"][i]),
             "cont_missing": torch.from_numpy(self.clin["cont_missing"][i]),
+            "pre_offset": torch.tensor(off, dtype=torch.float32),
             "label": torch.tensor(self.labels[i]),
             "hr": torch.tensor(self.hr[i]),
             "her2": torch.tensor(self.her2[i]),
@@ -78,6 +86,12 @@ class PatientBags(Dataset):
 
     def set_epoch(self, epoch: int, seed: int = 0):
         self.rng = np.random.default_rng(seed * 1000 + epoch)
+
+
+def pre_offset(clip) -> float:
+    """Cache value v (0..1) maps to raw = lo + v * (hi - lo), so raw / (hi - lo) = v + lo / (hi - lo)."""
+    lo, hi = float(clip[0]), float(clip[1])
+    return max(lo, 0.0) / max(hi - lo, 1e-6)
 
 
 def worker_init(worker_id):

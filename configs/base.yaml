@@ -16,7 +16,8 @@ model:
   backbone: facebook/vit-mae-base  # or google/vit-base-patch16-224, facebook/dinov2-base, resnet18
   pretrained: true
   train_blocks: 4                  # top ViT blocks fine-tuned (ablation: 2 / all)
-  input_phases: rgb                # rgb = pre/early/late as R/G/B; early = early phase x3 (grey)
+  input_phases: rgb                # rgb = pre/early/late as R/G/B; early = early phase x3 (grey);
+                                   # enhancement = early, (early-pre)/pre, (late-pre)/pre
   grad_checkpointing: true
   aggregation: tokens              # mean_logit | mean | mil | tokens
   d_model: 256
