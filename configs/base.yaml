@@ -23,7 +23,8 @@ model:
   n_layers: 2
   n_heads: 4
   ffn: 512
-  dropout: 0.2
+  dropout: 0.2                     # before the classification head
+  drop_path: 0.0                   # stochastic depth in the trained blocks (DINOv2 only)
   aux_heads: true
 loss:
   bce_weight: 0.5

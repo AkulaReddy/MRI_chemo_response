@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.8"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.9"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -337,7 +337,8 @@ for i, r in ok.iterrows():   # paired bootstrap against the baseline
     p = preds[(r["name"], r.seed)]
     common = b.index.intersection(p.index)          # same val patients in both (all 177 normally)
     if len(common) < len(b):
-        print(f"{r['name']}: compared on {len(common)} of {len(b)} baseline patients")
+        print(f"{r['name']}: compared on {len(common)} of {len(b)} baseline patients "
+              f"(baseline AUC on these: {stats.auc(b.loc[common, 'label'], b.loc[common, 'prob']):.4f})")
     d = stats.paired_bootstrap_auc_diff(b.loc[common, "label"], b.loc[common, "prob"], p.loc[common, "prob"])
     ok.at[i, "vs_base"], ok.at[i, "vs_base_ci"], ok.at[i, "vs_base_p"] = (
         round(d["diff"], 3), f"{d['ci'][0]:+.3f} to {d['ci'][1]:+.3f}", round(d["p"], 3))
@@ -400,6 +401,46 @@ CACHE_VERSION = 2
 DEBUG = False
 TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
 KEEP_CHECKPOINTS = True           # best.pt: ~350 MB (ViT) / ~45 MB (ResNet-18) per run
+PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
+'''),
+    *NOTEBOOKS["11_sweep.ipynb"][2:],
+]
+
+
+# 13_dinov2_ispy: DINOv2 (early phase) trained and validated on I-SPY1 + I-SPY2 only, with/without dropout
+NOTEBOOKS["13_dinov2_ispy.ipynb"] = [
+    md("""# 13 DINOv2 on I-SPY only, with regularisation (GPU)
+Same machinery as `11_sweep`. Every run: DINOv2 ViT-B/14, early phase only, top 2 blocks trained, and
+**I-SPY1 + I-SPY2 only** for training *and* validation (`data.cohorts=[ispy1, ispy2]`: 888 train, 132 val
+patients). Duke was at chance (0.44) for DINOv2 in `12_backbones`.
+- **baseline** (not retrained): `dinov2_early` from `12_backbones` (all cohorts), scored on the **same 132
+  I-SPY val patients**;
+- `ispy`: the same model trained on I-SPY only (effect of dropping Duke);
+- `ispy_dropout_0.5`: + dropout 0.5 before the head;
+- `ispy_droppath_0.2`: + stochastic depth 0.2 in the 2 trained DINOv2 blocks (`model.drop_path`);
+- `ispy_both`: + both.
+
+1. Session options: **GPU**, Internet **ON**, secret `GITHUB_TOKEN`; **+ Add Input** `mnj-cache-v2`.
+2. `DEBUG = True` first, then `DEBUG = False` and **Save Version -> Save & Run All (Commit)** (about 2 h).
+
+Note: AUCs here are on 132 patients (43 pCR+), so the CIs are wider than on the full 177."""),
+    params('''CONFIG = "b3_vit"
+SEEDS = [0]
+P = ["optim.patience=15", "model.backbone=facebook/dinov2-base", "model.train_blocks=2", "model.input_phases=early",
+     "data.cohorts=[ispy1, ispy2]"]
+RUNS = {                          # name: overrides; all are compared with BASELINE below
+    "ispy":              P,
+    "ispy_dropout_0.5":  P + ["model.dropout=0.5"],
+    "ispy_droppath_0.2": P + ["model.drop_path=0.2"],
+    "ispy_both":         P + ["model.dropout=0.5", "model.drop_path=0.2"],
+}
+# baseline = dinov2_early from 12_backbones (all cohorts, seed 0), compared on the I-SPY val patients
+BASELINE = {"name": "dinov2_early (all cohorts)",
+            "val_preds": "results/A/sweep_b3_vit_1019-1102/b3_vit_s0_1019-1129_a7e574e/val_preds.csv"}
+CACHE_VERSION = 2
+DEBUG = False
+TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
+KEEP_CHECKPOINTS = True           # best.pt ~350 MB per run
 PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
 '''),
     *NOTEBOOKS["11_sweep.ipynb"][2:],

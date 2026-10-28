@@ -72,5 +72,8 @@ def build_encoder(m: dict) -> nn.Module:
     """The slice encoder named by `model.backbone`."""
     name = m["backbone"]
     if name in RESNETS:
+        if m.get("drop_path"):
+            raise ValueError("drop_path is not supported for ResNet backbones")
         return ResNetEncoder(name, m.get("pretrained", True), m.get("train_blocks", "all"))
-    return ViTEncoder(name, m.get("pretrained", True), m.get("train_blocks", 4), m.get("grad_checkpointing", True))
+    return ViTEncoder(name, m.get("pretrained", True), m.get("train_blocks", 4), m.get("grad_checkpointing", True),
+                      drop_path=float(m.get("drop_path", 0.0)))

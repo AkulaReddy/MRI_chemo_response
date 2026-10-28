@@ -1,0 +1,28 @@
+{
+  "config": "b3_vit",
+  "seeds": [
+    0
+  ],
+  "runs": {
+    "mae_early": [
+      "optim.patience=15",
+      "model.train_blocks=2",
+      "model.input_phases=early"
+    ],
+    "dinov2_early": [
+      "optim.patience=15",
+      "model.backbone=facebook/dinov2-base",
+      "model.train_blocks=2",
+      "model.input_phases=early"
+    ],
+    "resnet18_early": [
+      "optim.patience=15",
+      "model.backbone=resnet18",
+      "model.train_blocks=all",
+      "model.input_phases=early",
+      "optim.lr_backbone=1.0e-4"
+    ]
+  },
+  "git_tag": "d1.8",
+  "debug": false
+}

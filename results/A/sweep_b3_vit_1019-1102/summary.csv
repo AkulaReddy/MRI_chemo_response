@@ -1,0 +1,4 @@
+name,seed,overrides,status,run_id,minutes,val_auc,ci_lo,ci_hi,auprc,ece,best_epoch,epochs_run,max_val_auc_any_epoch,auc_duke,auc_ispy1,auc_ispy2,vs_base,vs_base_ci,vs_base_p
+mae_early,0,optim.patience=15 model.train_blocks=2 model.input_phases=early,ok,b3_vit_s0_1019-1102_a7e574e,27.4,0.5642,0.47,0.656,0.391,0.096,13,29,0.5642,0.62,0.488,0.558,-0.015,-0.079 to +0.054,0.689
+dinov2_early,0,optim.patience=15 model.backbone=facebook/dinov2-base model.train_blocks=2 model.input_phases=early,ok,b3_vit_s0_1019-1129_a7e574e,33.1,0.6083,0.515,0.697,0.372,0.115,10,26,0.6083,0.443,0.669,0.629,0.029,-0.053 to +0.113,0.47
+resnet18_early,0,optim.patience=15 model.backbone=resnet18 model.train_blocks=all model.input_phases=early optim.lr_backbone=1.0e-4,ok,b3_vit_s0_1019-1203_a7e574e,15.9,0.6256,0.538,0.717,0.444,0.062,7,23,0.6256,0.477,0.686,0.684,0.046,-0.029 to +0.128,0.253

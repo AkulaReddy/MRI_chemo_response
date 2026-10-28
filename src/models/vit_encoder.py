@@ -61,8 +61,24 @@ def load_backbone(name: str, pretrained: bool = True):
     return ViTModel.from_pretrained(name, add_pooling_layer=False)
 
 
+class DropPath(nn.Module):
+    """Stochastic depth: in training, drop a block's residual branch for a random subset of samples
+    (keeping the identity path), scaling the kept ones by 1 / (1 - p). Identity at evaluation."""
+
+    def __init__(self, p: float):
+        super().__init__()
+        self.p = float(p)
+
+    def forward(self, x):
+        if not self.training or self.p == 0.0:
+            return x
+        keep = x.new_empty((x.shape[0],) + (1,) * (x.ndim - 1)).bernoulli_(1 - self.p)
+        return x * keep / (1 - self.p)
+
+
 class ViTEncoder(nn.Module):
-    def __init__(self, name="facebook/vit-mae-base", pretrained=True, train_blocks=4, grad_checkpointing=True):
+    def __init__(self, name="facebook/vit-mae-base", pretrained=True, train_blocks=4, grad_checkpointing=True,
+                 drop_path: float = 0.0):
         super().__init__()
         self.name = name
         self.vit = load_backbone(name, pretrained)
@@ -78,6 +94,11 @@ class ViTEncoder(nn.Module):
         for i, layer in enumerate(self.blocks):
             for p in layer.parameters():
                 p.requires_grad = i >= self.first_trained
+        if drop_path:   # stochastic depth in the trained blocks only (frozen blocks stay deterministic)
+            if not all(hasattr(layer, "drop_path") for layer in self.blocks):
+                raise ValueError(f"drop_path is supported for DINOv2 backbones, not {name}")
+            for i, layer in enumerate(self.blocks):
+                layer.drop_path = DropPath(drop_path) if i >= self.first_trained else nn.Identity()
         if grad_checkpointing and n_train > 0:
             self.vit.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
 

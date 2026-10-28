@@ -56,3 +56,33 @@ def test_train_and_export_with_new_backbones(extra, synthetic_cache, tmp_path):
     m = json.loads((run / "metrics.json").read_text())
     assert m["n_val"] == 16 and 0 <= m["val"]["auc"] <= 1
     assert (run / "export_preds.csv").exists()
+
+
+def test_drop_path_only_in_trained_dinov2_blocks():
+    from src.models.vit_encoder import DropPath
+    enc = build_encoder({"backbone": "tiny-dinov2", "pretrained": False, "train_blocks": 2,
+                         "grad_checkpointing": False, "drop_path": 0.3})
+    kinds = [type(b.drop_path).__name__ for b in enc.blocks]
+    assert kinds == ["Identity", "Identity", "DropPath", "DropPath"]
+    x = torch.randn(4, 3, 224, 224)
+    enc.eval()
+    with torch.no_grad():
+        assert torch.equal(enc(x)["cls"], enc(x)["cls"])                       # deterministic at eval
+    enc.train()
+    torch.manual_seed(0)
+    with torch.no_grad():
+        assert not torch.equal(enc(x)["cls"], enc(x)["cls"])                   # stochastic in training
+    assert DropPath(0.5).eval()(x) is x
+    with pytest.raises(ValueError, match="DINOv2"):
+        build_encoder({"backbone": "tiny-random", "pretrained": False, "train_blocks": 2,
+                       "grad_checkpointing": False, "drop_path": 0.1})
+
+
+def test_train_on_ispy_only_with_drop_path(synthetic_cache, tmp_path):
+    caches = [f"{c}={d}" for c, d in synthetic_cache.items()]
+    common = [a for a in COMMON if a != "model.backbone=tiny-random"]
+    run = main(["--config", "b3_vit", "--cache", *caches, "--cache-root", str(tmp_path / "none"),
+                "--out", str(tmp_path / "runs"), *common, "model.backbone=tiny-dinov2", "model.train_blocks=2",
+                "model.input_phases=early", "model.drop_path=0.2", "model.dropout=0.5", "data.cohorts=[ispy1]"])
+    m = json.loads((run / "metrics.json").read_text())
+    assert m["cohorts"] == ["ispy1"] and m["n_val"] == 8 and set(m["caches"]) == {"ispy1"}
