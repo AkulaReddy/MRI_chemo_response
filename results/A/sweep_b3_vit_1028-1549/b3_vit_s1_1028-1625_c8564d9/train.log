@@ -1,0 +1,27 @@
+[16:25:50] run b3_vit_s1_1028-1625_c8564d9 | cuda | cohorts ['ispy1', 'ispy2', 'duke'] | train 1098 (321 pCR) | val 177 (53 pCR) | trainable params 14.2M
+[16:26:52] epoch  0 loss 0.4730 val AUC 0.433 AUPRC 0.290 | 175 slices/s, 1.0 min  *best
+[16:27:51] epoch  1 loss 0.4506 val AUC 0.537 AUPRC 0.351 | 183 slices/s, 1.0 min  *best
+[16:28:51] epoch  2 loss 0.4109 val AUC 0.507 AUPRC 0.315 | 181 slices/s, 1.0 min
+[16:29:50] epoch  3 loss 0.4195 val AUC 0.531 AUPRC 0.341 | 182 slices/s, 1.0 min
+[16:30:50] epoch  4 loss 0.3907 val AUC 0.543 AUPRC 0.338 | 181 slices/s, 1.0 min  *best
+[16:31:50] epoch  5 loss 0.3921 val AUC 0.559 AUPRC 0.350 | 182 slices/s, 1.0 min  *best
+[16:32:50] epoch  6 loss 0.3603 val AUC 0.574 AUPRC 0.379 | 180 slices/s, 1.0 min  *best
+[16:33:50] epoch  7 loss 0.3457 val AUC 0.612 AUPRC 0.408 | 182 slices/s, 1.0 min  *best
+[16:34:49] epoch  8 loss 0.3614 val AUC 0.581 AUPRC 0.392 | 181 slices/s, 1.0 min
+[16:35:49] epoch  9 loss 0.3216 val AUC 0.592 AUPRC 0.366 | 181 slices/s, 1.0 min
+[16:36:48] epoch 10 loss 0.3306 val AUC 0.608 AUPRC 0.378 | 182 slices/s, 1.0 min
+[16:37:48] epoch 11 loss 0.3119 val AUC 0.580 AUPRC 0.356 | 181 slices/s, 1.0 min
+[16:38:47] epoch 12 loss 0.3002 val AUC 0.574 AUPRC 0.362 | 182 slices/s, 1.0 min
+[16:39:47] epoch 13 loss 0.2722 val AUC 0.557 AUPRC 0.356 | 181 slices/s, 1.0 min
+[16:40:46] epoch 14 loss 0.2815 val AUC 0.550 AUPRC 0.344 | 183 slices/s, 1.0 min
+[16:41:46] epoch 15 loss 0.2610 val AUC 0.576 AUPRC 0.361 | 180 slices/s, 1.0 min
+[16:42:46] epoch 16 loss 0.2333 val AUC 0.541 AUPRC 0.336 | 182 slices/s, 1.0 min
+[16:43:45] epoch 17 loss 0.2062 val AUC 0.565 AUPRC 0.358 | 182 slices/s, 1.0 min
+[16:44:45] epoch 18 loss 0.2120 val AUC 0.590 AUPRC 0.366 | 181 slices/s, 1.0 min
+[16:45:44] epoch 19 loss 0.1601 val AUC 0.573 AUPRC 0.364 | 182 slices/s, 1.0 min
+[16:46:44] epoch 20 loss 0.1869 val AUC 0.570 AUPRC 0.355 | 182 slices/s, 1.0 min
+[16:47:43] epoch 21 loss 0.1589 val AUC 0.595 AUPRC 0.369 | 182 slices/s, 1.0 min
+[16:48:42] epoch 22 loss 0.1791 val AUC 0.561 AUPRC 0.349 | 183 slices/s, 1.0 min
+[16:48:42] early stop: no val AUC gain for 15 epochs
+[16:48:57] best epoch 7: val AUC 0.612 (95% CI 0.517-0.706), AUPRC 0.408, ECE 0.102, 0.38 GPU-h
+[16:50:53] exported 1275 patients to /kaggle/working/runs/b3_vit_s1_1028-1625_c8564d9
