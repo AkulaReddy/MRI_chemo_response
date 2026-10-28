@@ -5,15 +5,20 @@ with and without ComBat harmonisation. Fitted on train, scored on val. CPU, unde
 
 Models (one run folder each, same format as src.baselines.tabular / src.train):
 - `subtype`: pCR rate of the patient's HR/HER2 subtype in train (a 3-row lookup table).
-- `rad`: logistic regression on the radiomics features (src.radiomics.FEATURES).
-- `rad_sub`: `rad` + HR and HER2 status.
+- `rad`: logistic regression on the radiomics features only (src.radiomics.FEATURES); ComBat without
+  covariates, so no HR/HER2 information enters anywhere.
+- `rad_sub`: radiomics + HR and HER2 status; ComBat keeps HR/HER2 as covariates.
+
+Why `rad` uses no ComBat covariates: ComBat keeps the covariate part of each feature and rescales the rest
+per batch, so the harmonised features depend on the covariates. With HR/HER2 as covariates, a "radiomics
+only" model silently uses subtype (val AUC 0.709 vs 0.625 without covariates, run radiomics_1028-1414).
 - `rad_nocombat`, `rad_sub_nocombat`: the same without ComBat, to measure what harmonisation adds.
 
 Pipeline: missing values -> train median; ComBat by protocol group (src.combat.protocol_groups), fitted on
-all train-split patients with features (labeled or not: ComBat does not use the outcome), with HR/HER2 as
-covariates so the subtype differences between groups are kept; standardise; LogisticRegressionCV (C by
-5-fold CV AUC on train). metrics.json also reports how well the batch can be predicted from the features
-before and after ComBat (balanced accuracy, 5-fold CV on train; chance = 1 / number of batches).
+all train-split patients with features (labeled or not: ComBat does not use the outcome); standardise;
+LogisticRegressionCV (C by 5-fold CV AUC on train). metrics.json also reports how well the batch can be
+predicted from the features before and after ComBat (balanced accuracy, 5-fold CV on train, ComBat fitted
+inside each fold; chance = 1 / number of batches).
 """
 from __future__ import annotations
 
@@ -25,7 +30,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.metrics import balanced_accuracy_score
+from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 
 from src import stats
@@ -52,15 +58,26 @@ def load_table(paths):
     return t[t.split.isin(["train", "val"])]       # test rows are never read here (D-006)
 
 
-def batch_predictability(X, batch, seed=0):
+def batch_predictability(X, batch, cov=None, combat=False, seed=0):
+    """Balanced accuracy of predicting the batch from the features (5-fold CV). With `combat`, ComBat is
+    fitted on the training folds only and applied to the held-out fold, as it would be to new patients
+    (fitting it on all rows first makes the held-out folds look *less* like their batch than chance)."""
+    batch = np.asarray(batch)
     y = pd.factorize(batch)[0]
     k = min(5, np.bincount(y).min())
     if len(set(y)) < 2 or k < 2:
         return None
-    clf = LogisticRegression(max_iter=2000, class_weight="balanced")
-    acc = cross_val_score(clf, StandardScaler().fit_transform(X), y, cv=StratifiedKFold(k, shuffle=True,
-                          random_state=seed), scoring="balanced_accuracy")
-    return round(float(acc.mean()), 3)
+    accs = []
+    for tr, te in StratifiedKFold(k, shuffle=True, random_state=seed).split(X, y):
+        a, b = X[tr], X[te]
+        if combat:
+            c = None if cov is None else cov[tr]
+            cb = ComBat().fit(a, batch[tr], c)
+            a, b = cb.transform(a, batch[tr], c), cb.transform(b, batch[te], None if cov is None else cov[te])
+        sc = StandardScaler().fit(a)
+        clf = LogisticRegression(max_iter=2000, class_weight="balanced").fit(sc.transform(a), y[tr])
+        accs.append(balanced_accuracy_score(y[te], clf.predict(sc.transform(b))))
+    return round(float(np.mean(accs)), 3)
 
 
 def run(name, t, out: Path, seed=0, min_batch=20):
@@ -77,13 +94,15 @@ def run(name, t, out: Path, seed=0, min_batch=20):
         Xall = train_all[FEATURES].fillna(med).to_numpy(float)
         Xtr, Xva = train[FEATURES].fillna(med).to_numpy(float), val[FEATURES].fillna(med).to_numpy(float)
         groups = protocol_groups(t, min_size=min_batch, fit_index=train_all.index)
-        if use_combat:
-            cb = ComBat().fit(Xall, groups[train_all.index], covariates(train_all))
-            info["batch_acc_before"] = batch_predictability(Xall, groups[train_all.index], seed)
-            info["batch_acc_after"] = batch_predictability(
-                cb.transform(Xall, groups[train_all.index], covariates(train_all)), groups[train_all.index], seed)
-            Xtr = cb.transform(Xtr, groups[train.index], covariates(train))
-            Xva = cb.transform(Xva, groups[val.index], covariates(val))
+        if use_combat:   # covariates only when the model may use HR/HER2 anyway (see the docstring)
+            cov = (lambda d: covariates(d)) if with_sub else (lambda d: None)
+            g_all = groups[train_all.index].to_numpy()
+            cb = ComBat().fit(Xall, g_all, cov(train_all))
+            info["batch_acc_before"] = batch_predictability(Xall, g_all, seed=seed)
+            info["batch_acc_after"] = batch_predictability(Xall, g_all, cov(train_all), combat=True, seed=seed)
+            Xtr = cb.transform(Xtr, groups[train.index], cov(train))
+            Xva = cb.transform(Xva, groups[val.index], cov(val))
+            info["combat_covariates"] = ["HR+", "HER2+", "HR_missing", "HER2_missing"] if with_sub else []
             info["batches"] = groups[train_all.index].value_counts().to_dict()
             info["batch_chance"] = round(1 / len(info["batches"]), 3)
         names = list(FEATURES)

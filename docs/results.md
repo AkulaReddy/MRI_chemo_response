@@ -18,6 +18,8 @@ Each run is stored in `results/<person>/<run folder>/`: `metrics.json`, `val_pre
 |---|---|---|---|
 | Subtype lookup (HR/HER2, 3 rows) | clinical | **0.662** | — |
 | B1 logistic regression | clinical + tumour size | 0.653 (0.57–0.74) | −0.009 (−0.08 to +0.06) |
+| Radiomics + subtype, logistic regression (section 8) | tumour features + HR/HER2 | **0.700** (0.62–0.78) | +0.038 (−0.03 to +0.11) |
+| Radiomics only (section 8) | tumour features | 0.631 (0.54–0.72) | −0.030 (−0.15 to +0.09) |
 | F2 attention fusion *(v1 cache, old code)* | image + clinical | **0.690** (0.60–0.77) | +0.028 (−0.00 to +0.06), p 0.06 |
 | F1 concat fusion *(v1 cache, old code)* | image + clinical | 0.678 (0.59–0.76) | +0.016 (−0.06 to +0.09) |
 | Best image-only: ResNet-18, early phase (v2 cache) | image | 0.626 (0.54–0.72) | −0.036 (−0.16 to +0.09) |
@@ -194,9 +196,51 @@ AUC of the image model **within** each subtype (dropout 0.5 run):
 5. **The image adds to subtype on I-SPY** (+0.05 in a quick check). The fusion models are the most
    promising route, but have not been rerun since v2 and the augmentation fix.
 
-## 8. Runs prepared, not yet run (code d1.10)
+## 8. Radiomics + ComBat baselines (`results/A/radiomics_1028-1414`)
 
-- `02_radiomics`: radiomics + ComBat + subtype baselines (CPU).
+- **Features:** 29 per patient (shape, enhancement kinetics, enhancement texture, 5 mm peritumoural ring),
+  from cache v2, for all 2,068 patients, with no errors.
+- **Duke tumour region:** box voxels enhancing ≥ 70%, for 913 of 914 patients.
+- **ComBat:** 14 protocol batches (cohort × matrix × slice thickness × pixel size), 20–343 training
+  patients each.
+- **Model:** logistic regression, C by 5-fold CV on train.
+
+**Use the reruns `r_*_1028-2101/2102_2c4396f`.** The first runs (`r_*_1028-1422/1423_c8564d9`) had a
+flaw, described below.
+
+| model | val AUC (95% CI) | Duke | I-SPY1 | I-SPY2 | vs subtype (paired, 95% CI) | p |
+|---|---|---|---|---|---|---|
+| subtype lookup | 0.662 (0.58–0.74) | 0.717 | 0.674 | 0.638 | — | — |
+| radiomics only, ComBat | 0.625 (0.53–0.72) | 0.617 | 0.574 | 0.645 | −0.037 (−0.15 to +0.08) | 0.57 |
+| radiomics only, no ComBat | 0.631 (0.54–0.72) | 0.646 | 0.591 | 0.599 | −0.030 (−0.15 to +0.09) | 0.65 |
+| **radiomics + subtype, ComBat** | **0.699** (0.61–0.78) | 0.657 | 0.715 | 0.704 | +0.037 (−0.03 to +0.10) | 0.22 |
+| **radiomics + subtype, no ComBat** | **0.700** (0.62–0.78) | 0.680 | 0.744 | 0.685 | +0.038 (−0.03 to +0.11) | 0.27 |
+
+- **Radiomics alone ≈ 0.63**, the same level as the best image-only network (ResNet-18 at 0.626). Within
+  subtypes it scores 0.57–0.63.
+- **Radiomics + subtype ≈ 0.70**, the best saved result so far. It is +0.04 over subtype, not significant.
+- **ComBat removes the batch signal but does not change AUC.**
+  - Batch predictability from the features drops from 0.379 to 0.111 balanced accuracy (chance 0.071),
+    with ComBat fitted inside each CV fold.
+  - The model with ComBat and the model without score the same AUC.
+- **Largest weights (radiomics only):**
+  - enhancement of the 5 mm ring around the tumour (`ring_re_early_mean`, `tumour_to_ring_re`);
+  - enhancement heterogeneity (entropy, GLCM energy);
+  - tumour volume.
+
+  Peritumoural enhancement as a pCR predictor matches published work (Braman et al. 2017).
+
+**Flaw in the first runs (fixed):**
+- **The bug:** the "radiomics only" model ran ComBat with HR/HER2 as covariates. ComBat keeps the
+  covariate part of each feature, so the harmonised features carried subtype information.
+- **Evidence:** HR status became more predictable from the features (AUC 0.637 → 0.668), and "radiomics
+  only" scored 0.709. That 0.709 is not a radiomics result.
+- **The fix:** `rad` now uses ComBat without covariates; only `rad_sub` keeps them.
+- **Second fix:** the batch check first fitted ComBat on all rows and then cross-validated, which pushed
+  the score below chance (0.032). It now fits ComBat inside each fold.
+
+## 9. Runs prepared, not yet run (code d1.10)
+
 - `01_build_cache` with `Z_MM = 0`: cache v3 (native slices).
 - `14_v3_enhancement`: v2 vs v3 and the relative-enhancement input, DINOv2, 2 seeds each.
 - **Still to do:** F1/F2 fusion on cache v2.

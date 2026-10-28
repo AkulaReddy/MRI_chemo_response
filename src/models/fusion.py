@@ -1,5 +1,10 @@
 """pCR models on slice bags: B3 (image only), F1 (concat + MLP), F2 (attention fusion, M3).
 
+Image encoders: 2D (each slice encoded alone, then aggregated over the bag) or 3D (`r3d_18`: the bag is a
+block of contiguous slices encoded as one volume; the aggregation then sees a single "slice").
+Aggregations: mean_logit / mean / mil / tokens (F2), and slice_attn (image only): a small transformer over
+the slice features with their position in the tumour, so the model can use how slices relate in depth.
+
 All take a batch dict from `PatientBags` with images already transformed to (B, K, 3, 224, 224)
 and return a dict with `logit` (B,), optional `aux_hr`/`aux_her2` (B,), `img_emb` (B, D) and,
 depending on the model, `slice_logits` (B, K), `mil_weights` (B, K) or `attn` (B, T, T).
@@ -9,6 +14,7 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
+from ..data.datasets import configure_bags
 from .pooling import GatedAttentionMIL, masked_mean
 from .backbones import build_encoder
 
@@ -73,7 +79,8 @@ class ClinicalTokens(nn.Module):
 
 class PCRModel(nn.Module):
     KINDS = ("image_only", "concat", "attn")
-    AGGS = ("mean_logit", "mean", "mil", "tokens")
+    AGGS = ("mean_logit", "mean", "mil", "tokens", "slice_attn")
+    PHASES = ("rgb", "early", "enhancement", "early_25d")
 
     def __init__(self, m: dict, cardinalities, n_cont):
         super().__init__()
@@ -81,18 +88,31 @@ class PCRModel(nn.Module):
         assert self.kind in self.KINDS and self.agg in self.AGGS, (self.kind, self.agg)
         assert not (self.agg == "tokens" and self.kind != "attn"), "tokens aggregation needs kind=attn"
         assert not (self.agg == "mean_logit" and self.kind != "image_only"), "mean_logit is for image_only"
+        assert not (self.agg == "slice_attn" and self.kind != "image_only"), "slice_attn is for image_only"
         self.encoder = build_encoder(m)
+        self.is_3d = getattr(self.encoder, "is_3d", False)
         # which DCE phases the encoder sees: "rgb" = pre/early/late as R/G/B (default); "early" = the early
         # post-contrast phase copied into all 3 channels (= a 1-channel input with the RGB filters summed);
-        # "enhancement" = early, (early - pre)/pre, (late - pre)/pre (relative-enhancement maps)
+        # "enhancement" = early, (early - pre)/pre, (late - pre)/pre (relative-enhancement maps);
+        # "early_25d" = the early phase of slices z-1, z, z+1 (built by the dataset; passed through here)
         self.input_phases = m.get("input_phases", "rgb")
-        assert self.input_phases in ("rgb", "early", "enhancement"), self.input_phases
+        assert self.input_phases in self.PHASES, self.input_phases
+        assert not (self.is_3d and self.input_phases == "early_25d"), "a 3D encoder already sees the neighbours"
         D, d, p = self.encoder.dim, m.get("d_model", 256), m.get("dropout", 0.2)
         self.drop = nn.Dropout(p)
         if self.agg == "mil":
             self.mil = GatedAttentionMIL(D, dropout=p)
 
-        if self.kind == "image_only":
+        if self.kind == "image_only" and self.agg == "slice_attn":
+            self.sa_proj = nn.Sequential(nn.Linear(D, d), nn.LayerNorm(d))
+            self.sa_pos = nn.Linear(1, d)
+            self.sa_cls = nn.Parameter(torch.zeros(1, 1, d))
+            self.sa_blocks = nn.ModuleList(FusionBlock(d, m.get("n_heads", 4), m.get("ffn", 512), p)
+                                           for _ in range(m.get("n_layers", 2)))
+            self.sa_norm = nn.LayerNorm(d)
+            self.head = nn.Linear(d, 1)
+            aux_dim = d
+        elif self.kind == "image_only":
             self.head = nn.Linear(D, 1)
             aux_dim = D
         else:
@@ -134,15 +154,19 @@ class PCRModel(nn.Module):
             mean, std = (flat.new_tensor(v).view(1, 3, 1, 1) for v in (self.encoder.mean, self.encoder.std))
             off = (pre_offset if pre_offset is not None else flat.new_zeros(b)).to(flat.dtype)
             flat = (enhancement_maps(flat * std + mean, off.repeat_interleave(k)) - mean) / std
+        if self.is_3d:   # the whole block at once: (B, 3, K, H, W) -> one feature vector per patient
+            vol = flat.view(b, k, *flat.shape[1:]).transpose(1, 2)
+            out = self.encoder(vol)
+            return out["cls"][:, None], out, valid.new_ones((b, 1))
         sel = valid.flatten()
         out = self.encoder(flat[sel], output_attentions=output_attentions)   # only real slices
         cls = out["cls"].new_zeros((b * k, out["cls"].shape[-1]))
         cls[sel] = out["cls"]
-        return cls.view(b, k, -1), out
+        return cls.view(b, k, -1), out, valid
 
     def forward(self, batch, output_attentions=False):
-        valid = batch["valid"]
-        h, enc_out = self.encode(batch["images"], valid, output_attentions, batch.get("pre_offset"))  # (B, K, D)
+        h, enc_out, valid = self.encode(batch["images"], batch["valid"], output_attentions,
+                                        batch.get("pre_offset"))                   # (B, K, D); K = 1 for 3D
         res = {"img_emb": masked_mean(h, valid)}
         if output_attentions:
             res["vit_attentions"] = enc_out["attentions"]
@@ -152,7 +176,19 @@ class PCRModel(nn.Module):
             pooled = res["img_emb"]
 
         if self.kind == "image_only":
-            if self.agg == "mean_logit":
+            if self.agg == "slice_attn":
+                pos = batch["slice_pos"][:, :h.shape[1]] if not self.is_3d else h.new_zeros(h.shape[:2])
+                x = self.sa_proj(h) + self.sa_pos(pos.unsqueeze(-1).to(h.dtype))
+                b = x.shape[0]
+                x = torch.cat([self.sa_cls.expand(b, -1, -1).to(x.dtype), x], 1)
+                keep = torch.cat([valid.new_ones((b, 1)), valid], 1)
+                for blk in self.sa_blocks:
+                    x, w = blk(x, ~keep)
+                z = self.sa_norm(x[:, 0])
+                res["logit"] = self.head(self.drop(z)).squeeze(-1)
+                res["slice_attn"] = w[:, 0, 1:]                 # what [CLS] attended to, per slice
+                pooled = z
+            elif self.agg == "mean_logit":
                 sl = self.head(self.drop(h)).squeeze(-1)
                 res["slice_logits"] = sl
                 res["logit"] = masked_mean(sl.unsqueeze(-1), valid).squeeze(-1)
@@ -168,7 +204,8 @@ class PCRModel(nn.Module):
             aux_in = img
         else:
             if self.agg == "tokens":
-                img = self.img_proj(h) + self.slice_pos(batch["slice_pos"].unsqueeze(-1).to(h.dtype))
+                pos = batch["slice_pos"] if not self.is_3d else h.new_zeros(h.shape[:2])
+                img = self.img_proj(h) + self.slice_pos(pos.unsqueeze(-1).to(h.dtype))
                 img_valid = valid
                 aux_in = masked_mean(img, valid)
             else:
@@ -194,4 +231,8 @@ class PCRModel(nn.Module):
 
 
 def build_model(cfg: dict, encoder) -> PCRModel:
-    return PCRModel(cfg["model"], encoder.cardinalities, len(encoder.cont))
+    model = PCRModel(cfg["model"], encoder.cardinalities, len(encoder.cont))
+    # the datasets created next (by the training script) build the bags this model needs
+    configure_bags(slices="early_25d" if model.input_phases == "early_25d" else "phases",
+                   sampling="block" if model.is_3d else "spread")
+    return model
