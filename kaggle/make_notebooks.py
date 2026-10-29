@@ -11,7 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_SLUG = "AkulaReddy/MRI_chemo_response"
-CURRENT_TAG = "d1.10"   # bump this whenever a new code tag is made, then regenerate
+CURRENT_TAG = "d1.11"   # bump this whenever a new code tag is made, then regenerate
 
 SETUP = r'''# ==== SETUP (do not edit) ====
 import base64, json, os, shutil, subprocess, sys
@@ -588,6 +588,49 @@ CACHE_VERSION = 2                 # used for entries without a "cache" key
 DEBUG = False
 TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
 KEEP_CHECKPOINTS = False          # 10 runs x ~350 MB; set True only if you will reuse the weights
+PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
+'''),
+    *NOTEBOOKS["11_sweep.ipynb"][2:],
+]
+
+
+# 15_3d: using 3D information - slice attention (A), 2.5D input (B), 3D ResNet-18 on slice blocks (C)
+NOTEBOOKS["15_3d.ipynb"] = [
+    md("""# 15 Using 3D information: slice attention, 2.5D input, 3D CNN (GPU)
+Same machinery as `11_sweep`; all runs on cache v2, dropout 0.5, seeds 0 and 1 (`docs/ideas.md`, item 11).
+The **first entry is the baseline**: the current best 2D model, which encodes every slice alone and averages.
+- `dinov2_early`: DINOv2, early phase, mean of slice scores (baseline, 2D);
+- `dinov2_slice_attn` (**A**): the same encoder, but a small transformer over the slice features and their
+  position in the tumour replaces the average, so the model can relate slices to each other in depth;
+- `dinov2_25d` (**B**): each slice's 3 channels are the early phase of slices z-1, z, z+1 (2 mm apart), so
+  every patch sees a little depth;
+- `r3d18_rgb` (**C**): a **3D ResNet-18** (pretrained on Kinetics-400 video) on a block of **32 contiguous
+  slices** (64 mm) x 112 x 112 mm around the tumour (resized to 1 mm pixels), pre/early/late as channels;
+- `r3d18_enh` (**C**): the same with the relative-enhancement maps as channels.
+
+1. Session options: **GPU**, Internet **ON** (downloads DINOv2 and the Kinetics weights), secret `GITHUB_TOKEN`.
+2. **+ Add Input**: `mnj-cache-v2`.
+3. `DEBUG = True` first, then `DEBUG = False` and **Save Version -> Save & Run All (Commit)** (about 5-6 h).
+
+Read the **seed-averaged** table (each setting's two seeds averaged, then paired vs the baseline)."""),
+    params('''CONFIG = "b3_vit"
+SEEDS = [0, 1]
+P = ["optim.patience=15", "model.dropout=0.5"]
+DINO = P + ["model.backbone=facebook/dinov2-base", "model.train_blocks=2"]
+R3D = P + ["model.backbone=r3d_18", "model.train_blocks=all", "model.aggregation=mean", "optim.lr_backbone=1.0e-4",
+           "data.k_train=32", "data.k_eval=32", "export.k=32", "data.margin=2"]
+RUNS = {                          # name: overrides; the FIRST entry is the baseline
+    "dinov2_early":      DINO + ["model.input_phases=early"],
+    "dinov2_slice_attn": DINO + ["model.input_phases=early", "model.aggregation=slice_attn"],
+    "dinov2_25d":        DINO + ["model.input_phases=early_25d", "data.margin=1"],
+    "r3d18_rgb":         R3D + ["model.input_phases=rgb"],
+    "r3d18_enh":         R3D + ["model.input_phases=enhancement"],
+}
+BASELINE = None                   # None = the first entry of RUNS, same seed
+CACHE_VERSION = 2
+DEBUG = False
+TIME_BUDGET_H = 11.0              # stop starting new runs after this (Kaggle limit: 12 h)
+KEEP_CHECKPOINTS = False          # 10 runs; set True only if you will reuse the weights
 PUSH_RESULTS = True               # commit results/<PERSON>/<sweep id>/ (small files only)
 '''),
     *NOTEBOOKS["11_sweep.ipynb"][2:],

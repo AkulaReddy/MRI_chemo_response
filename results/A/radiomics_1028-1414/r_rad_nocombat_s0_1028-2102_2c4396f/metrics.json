@@ -1,0 +1,83 @@
+{
+  "run_id": "r_rad_nocombat_s0_1028-2102_2c4396f",
+  "config": "radiomics_rad_nocombat",
+  "seed": 0,
+  "git": "2c4396f",
+  "cohorts": [
+    "duke",
+    "ispy1",
+    "ispy2"
+  ],
+  "n_train": 1098,
+  "n_train_combat": 1530,
+  "n_val": 177,
+  "features": [
+    "log_volume_ml",
+    "sphericity",
+    "log_surface_to_volume",
+    "major_axis_mm",
+    "elongation",
+    "flatness",
+    "n_components",
+    "largest_component_frac",
+    "re_early_mean",
+    "re_early_median",
+    "re_early_p10",
+    "re_early_p90",
+    "re_early_std",
+    "re_late_mean",
+    "re_late_p90",
+    "washout_mean",
+    "frac_washout",
+    "frac_plateau",
+    "frac_persistent",
+    "frac_strong",
+    "re_early_entropy",
+    "glcm_contrast",
+    "glcm_homogeneity",
+    "glcm_energy",
+    "glcm_correlation",
+    "ring_re_early_mean",
+    "ring_re_early_p90",
+    "ring_frac_enhancing",
+    "tumour_to_ring_re"
+  ],
+  "val": {
+    "n": 177,
+    "n_pos": 53,
+    "auc": 0.6314668289713938,
+    "auprc": 0.4197062508651363,
+    "brier": 0.20156323611580823,
+    "ece": 0.019989192367139447,
+    "auc_ci": [
+      0.543337380533539,
+      0.7186622807017543
+    ],
+    "by_cohort": {
+      "duke": {
+        "n": 45,
+        "n_pos": 10,
+        "auc": 0.6457142857142857,
+        "auprc": 0.3988940847005363,
+        "brier": 0.16802274314885096,
+        "ece": 0.06856163100704556
+      },
+      "ispy1": {
+        "n": 33,
+        "n_pos": 11,
+        "auc": 0.5909090909090909,
+        "auprc": 0.42195488531300884,
+        "brier": 0.2192669263928765,
+        "ece": 0.06846513688548496
+      },
+      "ispy2": {
+        "n": 99,
+        "n_pos": 32,
+        "auc": 0.5993470149253731,
+        "auprc": 0.4692587951373025,
+        "brier": 0.21090768464479642,
+        "ece": 0.07004639985713848
+      }
+    }
+  }
+}

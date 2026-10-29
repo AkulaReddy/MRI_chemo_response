@@ -304,3 +304,40 @@ offset distort the intensity ratios.
   - **ComBat:** `src/combat.py`, fitted on train, batches = protocol groups.
   - **Baselines:** `src/baselines/radiomics.py`: subtype lookup (now a saved run), rad, rad_sub, and both
     without ComBat.
+
+### 2026-10-28: radiomics result and a ComBat pitfall
+
+- **Results** (details in `docs/results.md`, section 8):
+  - radiomics only: 0.63;
+  - radiomics + subtype: 0.70, the best so far but not significant vs subtype (+0.04);
+  - ComBat removes the batch signal but does not change AUC.
+- **Pitfall found: Accepted fix.**
+  - **Problem:** ComBat with HR/HER2 as covariates leaks subtype into "radiomics-only" features, which
+    gave a false 0.709.
+  - **Rule:** use ComBat covariates only in models that are allowed to see those covariates anyway.
+  - **Applies to ComBat on deep features too.**
+
+### 2026-10-28: 3D information (item 11): Implemented (d1.11), waiting for Kaggle runs
+
+- **Where things stood:**
+  - Radiomics was already mostly 3D (shape, kinetics, entropy and ring all use every tumour slice); only
+    the GLCM texture was per slice.
+  - Every deep model was 2D: each slice encoded alone, the scores averaged, slice order ignored.
+- **Why the deep models were 2D:** pretrained weights are 2D, the data is small (~1,100 labeled training
+  patients), and the paper's baseline was 2D. These made 3D harder, not pointless.
+- **Implemented:**
+  - **A. Slice attention** (`model.aggregation: slice_attn`): a 2-layer transformer over the slice
+    features plus their position in the tumour, with a [CLS] token, instead of averaging.
+  - **B. 2.5D input** (`model.input_phases: early_25d`): the 3 channels are the early phase of slices
+    z−1, z, z+1.
+  - **C. 3D CNN** (`model.backbone: r3d_18`): torchvision 3D ResNet-18 with Kinetics-400 video weights.
+    - **Input:** a block of 32 contiguous slices (64 mm) × 112 × 112 mm around the tumour, resized to
+      1 mm pixels.
+    - **Channels:** pre/early/late, or the enhancement maps.
+    - **Bag:** the dataset's `block` sampling provides the slices (random block position in training,
+      centred in evaluation).
+  - **D. 3D GLCM:** the radiomics texture now uses all 13 3D neighbour directions (`glcm3d_*`). The
+    features must be re-extracted with `02_radiomics`.
+- **Experiment:** notebook `15_3d`, 2 seeds per run.
+  - **Baseline:** DINOv2 early with mean aggregation.
+  - **Runs:** A, B, 3D CNN with RGB channels, 3D CNN with enhancement channels.

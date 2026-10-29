@@ -96,4 +96,5 @@ def test_radiomics_baselines_end_to_end(tmp_path):
     by = {r["config"]: r for r in res}
     assert by["radiomics_rad"]["val"]["auc"] > 0.7
     assert "batch_acc_after" in by["radiomics_rad"] and "batch_acc_after" not in by["radiomics_rad_nocombat"]
+    assert by["radiomics_rad"]["combat_covariates"] == [] and by["radiomics_rad_sub"]["combat_covariates"]
     assert len(list((tmp_path / "out").glob("r_*/val_preds.csv"))) == 5

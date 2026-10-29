@@ -1,0 +1,108 @@
+{
+  "run_id": "r_rad_sub_s0_1028-2102_2c4396f",
+  "config": "radiomics_rad_sub",
+  "seed": 0,
+  "git": "2c4396f",
+  "cohorts": [
+    "duke",
+    "ispy1",
+    "ispy2"
+  ],
+  "n_train": 1098,
+  "n_train_combat": 1530,
+  "n_val": 177,
+  "features": [
+    "log_volume_ml",
+    "sphericity",
+    "log_surface_to_volume",
+    "major_axis_mm",
+    "elongation",
+    "flatness",
+    "n_components",
+    "largest_component_frac",
+    "re_early_mean",
+    "re_early_median",
+    "re_early_p10",
+    "re_early_p90",
+    "re_early_std",
+    "re_late_mean",
+    "re_late_p90",
+    "washout_mean",
+    "frac_washout",
+    "frac_plateau",
+    "frac_persistent",
+    "frac_strong",
+    "re_early_entropy",
+    "glcm_contrast",
+    "glcm_homogeneity",
+    "glcm_energy",
+    "glcm_correlation",
+    "ring_re_early_mean",
+    "ring_re_early_p90",
+    "ring_frac_enhancing",
+    "tumour_to_ring_re"
+  ],
+  "batch_acc_before": 0.379,
+  "batch_acc_after": 0.111,
+  "combat_covariates": [
+    "HR+",
+    "HER2+",
+    "HR_missing",
+    "HER2_missing"
+  ],
+  "batches": {
+    "duke|256|2mm|coarse": 343,
+    "ispy2|256|2mm|fine": 219,
+    "duke|256|thin|coarse": 200,
+    "ispy2|256|2mm|coarse": 173,
+    "ispy2|256|thin|coarse": 128,
+    "ispy2|other|thin|coarse": 118,
+    "duke|256|2mm|fine": 78,
+    "ispy1|256|2mm|coarse": 66,
+    "ispy2|256|thin|fine": 63,
+    "ispy2|256|thick|coarse": 42,
+    "ispy1|256|thick|coarse": 38,
+    "duke|256|thin|fine": 21,
+    "ispy2|other|2mm|fine": 21,
+    "ispy2|256|thick|fine": 20
+  },
+  "batch_chance": 0.071,
+  "val": {
+    "n": 177,
+    "n_pos": 53,
+    "auc": 0.6991783323189289,
+    "auprc": 0.5198637411972092,
+    "brier": 0.1847402319389142,
+    "ece": 0.047107601489362404,
+    "auc_ci": [
+      0.6125960078157324,
+      0.7823757991789487
+    ],
+    "by_cohort": {
+      "duke": {
+        "n": 45,
+        "n_pos": 10,
+        "auc": 0.6571428571428571,
+        "auprc": 0.4101845238095238,
+        "brier": 0.1643222490652844,
+        "ece": 0.0933454858491346
+      },
+      "ispy1": {
+        "n": 33,
+        "n_pos": 11,
+        "auc": 0.7148760330578512,
+        "auprc": 0.663474025974026,
+        "brier": 0.18814159440524073,
+        "ece": 0.12550563991235342
+      },
+      "ispy2": {
+        "n": 99,
+        "n_pos": 32,
+        "auc": 0.7038246268656716,
+        "auprc": 0.5624213261666422,
+        "brier": 0.192887345756334,
+        "ece": 0.07843939714275144
+      }
+    }
+  }
+}

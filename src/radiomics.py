@@ -1,5 +1,8 @@
 """Hand-made tumour features from one cache file (radiomics baseline, docs/ideas.md items 12 and 17).
 
+Every feature is computed in 3D over the whole tumour (all its slices), including the texture
+(13-direction 3D GLCM; up to d1.10 the GLCM was 2D per slice, features `glcm_*`).
+
 Input: a builder v2/v3 cache `.npz` (uint8 pre/early/late on a fixed 0.7 mm grid, plus the clip range).
 Intensities are converted back to raw-proportional units (cache value + lo / (hi - lo), see
 `datasets.pre_offset`), so the kinetic ratios below do not depend on the scanner's gain. Texture is computed
@@ -44,24 +47,47 @@ def tumour_region(d, re_e):
     return (m, "box_pe70") if m.sum() >= 10 else (box, "box")
 
 
-def _glcm_features(q, mask, levels):
-    """GLCM over the mask on each slice (distance 1, 4 angles, symmetric), pooled over slices.
-    `q` holds levels 1..levels inside the mask; 0 outside (dropped from the matrix)."""
-    from skimage.feature import graycomatrix, graycoprops
-    total = np.zeros((levels + 1, levels + 1, 1, 4))
-    for z in np.flatnonzero(mask.any((1, 2))):
-        ys, xs = np.nonzero(mask[z])
-        sl = np.where(mask[z], q[z], 0)[ys.min():ys.max() + 1, xs.min():xs.max() + 1].astype(np.uint8)
-        total += graycomatrix(sl, [1], [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4], levels=levels + 1,
-                              symmetric=True)
-    g = total[1:, 1:]
-    if g.sum() == 0:
-        return {f"glcm_{k}": np.nan for k in ("contrast", "homogeneity", "energy", "correlation")}
-    out = {}
-    for k in ("contrast", "homogeneity", "energy", "correlation"):
-        v = graycoprops(g, k)[0]
-        out[f"glcm_{k}"] = float(np.nanmean(v))
+# the 13 unique neighbour directions of a voxel in 3D (the other 13 are their opposites)
+DIRECTIONS_3D = [(dz, dy, dx) for dz in (-1, 0, 1) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+                 if (dz, dy, dx) > (0, 0, 0)]
+
+
+def glcm_3d(q, mask, levels):
+    """Grey-level co-occurrence over the tumour in 3D: for each of the 13 directions, every pair of
+    neighbouring tumour voxels (both inside `mask`) counts once in each order (symmetric). `q` holds levels
+    0..levels-1. Returns (13, levels, levels) probabilities (directions without pairs are all zero)."""
+    out = np.zeros((len(DIRECTIONS_3D), levels, levels))
+    for n, off in enumerate(DIRECTIONS_3D):
+        a = tuple(slice(max(0, -o), q.shape[i] - max(0, o)) for i, o in enumerate(off))
+        b = tuple(slice(max(0, o), q.shape[i] - max(0, -o)) for i, o in enumerate(off))
+        both = mask[a] & mask[b]
+        if not both.any():
+            continue
+        m = np.bincount(q[a][both] * levels + q[b][both], minlength=levels * levels).reshape(levels, levels)
+        m = m + m.T
+        out[n] = m / m.sum()
     return out
+
+
+def _glcm_features(q, mask, levels):
+    """Texture of the enhancement map from the 3D GLCM, averaged over the 13 directions (IBSI-style
+    contrast, homogeneity, energy = sqrt(angular second moment), correlation). The voxels are 0.7 x 0.7 x
+    2.0 mm, so the in-plane and through-plane neighbours are at different distances."""
+    P = glcm_3d(q, mask, levels)
+    P = P[P.sum((1, 2)) > 0]
+    if not len(P):
+        return {f"glcm3d_{k}": np.nan for k in ("contrast", "homogeneity", "energy", "correlation")}
+    i, j = np.meshgrid(np.arange(levels), np.arange(levels), indexing="ij")
+    con = (P * (i - j) ** 2).sum((1, 2))
+    hom = (P / (1 + (i - j) ** 2)).sum((1, 2))
+    ene = np.sqrt((P ** 2).sum((1, 2)))
+    mi, mj = (P * i).sum((1, 2)), (P * j).sum((1, 2))
+    si = np.sqrt((P * (i - mi[:, None, None]) ** 2).sum((1, 2)))
+    sj = np.sqrt((P * (j - mj[:, None, None]) ** 2).sum((1, 2)))
+    cov = (P * (i - mi[:, None, None]) * (j - mj[:, None, None])).sum((1, 2))
+    cor = np.where(si * sj > 0, cov / np.maximum(si * sj, 1e-12), 1.0)   # a flat region is fully correlated
+    return {"glcm3d_contrast": float(con.mean()), "glcm3d_homogeneity": float(hom.mean()),
+            "glcm3d_energy": float(ene.mean()), "glcm3d_correlation": float(cor.mean())}
 
 
 def _shape_features(mask, spacing):
@@ -118,7 +144,7 @@ def patient_features(d) -> dict:
     hist = np.histogram(e.clip(lo, hi), bins=n, range=(lo, hi))[0] / len(e)
     nz = hist[hist > 0]
     f["re_early_entropy"] = float(-(nz * np.log2(nz)).sum())
-    q = (np.clip(np.floor((re_e - lo) / (hi - lo) * n), 0, n - 1) + 1).astype(np.uint8)
+    q = np.clip(np.floor((re_e - lo) / (hi - lo) * n), 0, n - 1).astype(np.int64)
     f.update(_glcm_features(q, mask, n))
 
     dist = ndimage.distance_transform_edt(~mask, sampling=spacing)
@@ -138,5 +164,5 @@ FEATURES = ["log_volume_ml", "sphericity", "log_surface_to_volume", "major_axis_
             "n_components", "largest_component_frac",
             "re_early_mean", "re_early_median", "re_early_p10", "re_early_p90", "re_early_std", "re_late_mean",
             "re_late_p90", "washout_mean", "frac_washout", "frac_plateau", "frac_persistent", "frac_strong",
-            "re_early_entropy", "glcm_contrast", "glcm_homogeneity", "glcm_energy", "glcm_correlation",
+            "re_early_entropy", "glcm3d_contrast", "glcm3d_homogeneity", "glcm3d_energy", "glcm3d_correlation",
             "ring_re_early_mean", "ring_re_early_p90", "ring_frac_enhancing", "tumour_to_ring_re"]

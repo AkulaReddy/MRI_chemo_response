@@ -1,0 +1,85 @@
+{
+  "run_id": "b3_vit_s1_1028-1922_c8564d9",
+  "config": "b3_vit",
+  "config_hash": "9a3b2aed5b",
+  "seed": 1,
+  "git": "c8564d9",
+  "cohorts": [
+    "ispy1",
+    "ispy2",
+    "duke"
+  ],
+  "best_epoch": 6,
+  "epochs_run": 22,
+  "gpu_hours": 0.369,
+  "device": "Tesla T4",
+  "n_train": 1098,
+  "n_val": 177,
+  "caches": {
+    "ispy1": {
+      "dir": "/kaggle/input/datasets/akulareddy/mnj-cache-v2/cache_v2_ispy1",
+      "builder_version": 2,
+      "grid_mm": {
+        "z_mm": 2.0,
+        "xy_mm": 0.7
+      },
+      "git": "ee21eaf"
+    },
+    "ispy2": {
+      "dir": "/kaggle/input/datasets/akulareddy/mnj-cache-v2/cache_v2_ispy2",
+      "builder_version": 2,
+      "grid_mm": {
+        "z_mm": 2.0,
+        "xy_mm": 0.7
+      },
+      "git": "ee21eaf"
+    },
+    "duke": {
+      "dir": "/kaggle/input/datasets/akulareddy/mnj-cache-v2/cache_v2_duke",
+      "builder_version": 2,
+      "grid_mm": {
+        "z_mm": 2.0,
+        "xy_mm": 0.7
+      },
+      "git": "ee21eaf"
+    }
+  },
+  "val": {
+    "n": 177,
+    "n_pos": 53,
+    "auc": 0.6112294583079732,
+    "auprc": 0.4122638502380658,
+    "brier": 0.20975934164575452,
+    "ece": 0.08910979928664528,
+    "by_cohort": {
+      "duke": {
+        "n": 45,
+        "n_pos": 10,
+        "auc": 0.5428571428571429,
+        "auprc": 0.3284320289341327,
+        "brier": 0.18605963695540756,
+        "ece": 0.1906435644461049
+      },
+      "ispy1": {
+        "n": 33,
+        "n_pos": 11,
+        "auc": 0.5082644628099173,
+        "auprc": 0.36116309229115795,
+        "brier": 0.2551662559712738,
+        "ece": 0.17598474157663685
+      },
+      "ispy2": {
+        "n": 99,
+        "n_pos": 32,
+        "auc": 0.6618470149253731,
+        "auprc": 0.4794345064003458,
+        "brier": 0.20539629657831487,
+        "ece": 0.09684611998046888
+      }
+    },
+    "auc_ci": [
+      0.5182337446598956,
+      0.701500232063903
+    ]
+  }
+}

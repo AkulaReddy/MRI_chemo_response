@@ -1,0 +1,61 @@
+{
+  "config": "b3_vit",
+  "seeds": [
+    0,
+    1
+  ],
+  "runs": {
+    "v2_early": {
+      "cache": 2,
+      "set": [
+        "optim.patience=15",
+        "model.backbone=facebook/dinov2-base",
+        "model.train_blocks=2",
+        "model.dropout=0.5",
+        "model.input_phases=early"
+      ]
+    },
+    "v3_early": {
+      "cache": 3,
+      "set": [
+        "optim.patience=15",
+        "model.backbone=facebook/dinov2-base",
+        "model.train_blocks=2",
+        "model.dropout=0.5",
+        "model.input_phases=early"
+      ]
+    },
+    "v2_rgb": {
+      "cache": 2,
+      "set": [
+        "optim.patience=15",
+        "model.backbone=facebook/dinov2-base",
+        "model.train_blocks=2",
+        "model.dropout=0.5",
+        "model.input_phases=rgb"
+      ]
+    },
+    "v2_enh": {
+      "cache": 2,
+      "set": [
+        "optim.patience=15",
+        "model.backbone=facebook/dinov2-base",
+        "model.train_blocks=2",
+        "model.dropout=0.5",
+        "model.input_phases=enhancement"
+      ]
+    },
+    "v3_enh": {
+      "cache": 3,
+      "set": [
+        "optim.patience=15",
+        "model.backbone=facebook/dinov2-base",
+        "model.train_blocks=2",
+        "model.dropout=0.5",
+        "model.input_phases=enhancement"
+      ]
+    }
+  },
+  "git_tag": "d1.10",
+  "debug": false
+}

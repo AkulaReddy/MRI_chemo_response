@@ -1,0 +1,8 @@
+{
+  "kind": "lookup",
+  "pCR_rate_by_subtype": {
+    "HER2pos": 0.4251,
+    "HRposHER2neg": 0.141,
+    "TripleNeg": 0.3785
+  }
+}
