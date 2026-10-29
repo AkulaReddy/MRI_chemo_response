@@ -79,6 +79,19 @@ def test_combat_removes_batch_effects_and_keeps_covariates():
         cb.transform(X[:3], np.array(["zz"] * 3), cov[:3])
 
 
+def test_protocol_batches_are_all_seen_in_training():
+    """Regression (Kaggle step 9, 2026-10-28): a val patient fell back to a batch no training patient had."""
+    from src.data.metadata import load_metadata
+    from src.vitonly.features import batches_of
+    split = load_split()
+    t = load_metadata().loc[split[split.split.isin(["train", "val"]) & split.labeled].pid]
+    is_train = (split.loc[t.pid, "split"] == "train").to_numpy()
+    b = batches_of(t, "protocol", is_train)
+    counts = pd.Series(b[is_train]).value_counts()
+    assert set(b[~is_train]) <= set(counts.index)
+    assert counts.min() >= 20 and len(counts) >= 6
+
+
 def test_radiomics_features(cache):
     s = _slab(cache)
     f_vol = radiomics.extract(s, 0.7, 2.0, "volume")

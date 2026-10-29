@@ -90,8 +90,10 @@ def subtype_of(table):
 
 
 def batches_of(table, how="cohort", is_train=None, min_n=20):
-    """cohort, or protocol = cohort x pixel-size bin x slice-thickness bin (groups with < min_n training
-    patients fall back to their cohort, so ComBat never estimates a batch from a handful of patients)."""
+    """cohort, or protocol = cohort x pixel-size bin x slice-thickness bin. Groups with < min_n training
+    patients (or none, e.g. a protocol seen only in val) are pooled into `<cohort>|other`; if that pool itself
+    has < min_n training patients, it joins the cohort's largest group. So every batch a val patient gets was
+    estimated from >= min_n training patients (ComBat cannot apply a batch it never saw)."""
     coh = table.cohort.to_numpy(str)
     if how == "cohort":
         return coh
@@ -100,9 +102,19 @@ def batches_of(table, how="cohort", is_train=None, min_n=20):
     xy = np.digitize(table.xy_spacing.to_numpy(float), [0.6, 0.8])
     z = np.digitize(table.slice_thick.to_numpy(float), [1.6, 2.4])
     b = np.array([f"{c}|xy{a}|z{d}" for c, a, d in zip(coh, xy, z)])
-    tr = b if is_train is None else b[is_train]
-    small = {g for g, n in zip(*np.unique(tr, return_counts=True)) if n < min_n}
-    return np.array([c if g in small or g not in set(tr) else g for g, c in zip(b, coh)])
+    tr = np.ones(len(b), bool) if is_train is None else np.asarray(is_train)
+    count = pd.Series(b[tr]).value_counts()
+    b = np.array([g if count.get(g, 0) >= min_n else f"{c}|other" for g, c in zip(b, coh)])
+    count = pd.Series(b[tr]).value_counts()
+    for c in set(coh):
+        own = count[[g for g in count.index if g.startswith(c + "|")]]
+        if count.get(f"{c}|other", 0) < min_n and len(own):
+            big = own.drop(f"{c}|other", errors="ignore")
+            target = big.idxmax() if len(big) else f"{c}|other"
+            b[b == f"{c}|other"] = target
+        elif not len(own):                                  # a cohort with no training patients at all
+            b[coh == c] = c
+    return b
 
 
 def covariates_of(table):
